@@ -1,0 +1,192 @@
+[
+  {
+    "id": "ubuntu",
+    "title": "Ubuntu",
+    "hex": "E95420",
+    "source": "https://design.ubuntu.com/resources",
+    "guidelines": "https://design.ubuntu.com/brand",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/ubuntu.svg",
+    "upstreamSHA256": "b0aca674c881a07bb60b26afbcee07093ae419e29ee38e376f938817fa66ae03"
+  },
+  {
+    "id": "debian",
+    "title": "Debian",
+    "hex": "A81D33",
+    "source": "https://www.debian.org/logos",
+    "guidelines": "https://www.debian.org/logos/",
+    "license": {
+      "type": "CC-BY-SA-3.0"
+    },
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/debian.svg",
+    "upstreamSHA256": "8835536d63c80990f9c90c935982ba329d163e707c894278ca6bd73258d1962b"
+  },
+  {
+    "id": "fedora",
+    "title": "Fedora",
+    "hex": "51A2DA",
+    "source": "https://docs.fedoraproject.org/en-US/project/brand/",
+    "guidelines": "https://fedoraproject.org/wiki/Legal:Trademark_guidelines",
+    "license": {
+      "type": "custom",
+      "url": "https://docs.fedoraproject.org/en-US/project/brand/"
+    },
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/fedora.svg",
+    "upstreamSHA256": "c234757373cab5ed80d7b2df8ff26ea039bcec16a9e9a47adbd29f5d0e94489a"
+  },
+  {
+    "id": "redhat",
+    "title": "Red Hat",
+    "hex": "EE0000",
+    "source": "https://www.redhat.com/en/about/brand/new-brand/details",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/redhat.svg",
+    "upstreamSHA256": "3d0e1854a9dad1a8ad11132843f522f948197ec0e0ee49b7a51d5fdf44230568"
+  },
+  {
+    "id": "arch",
+    "title": "Arch Linux",
+    "hex": "1793D1",
+    "source": "https://www.archlinux.org/art",
+    "guidelines": "https://wiki.archlinux.org/index.php/DeveloperWiki:TrademarkPolicy#Logo_Usage_Guidelines",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/archlinux.svg",
+    "upstreamSHA256": "2b1d26b4a1194c40dc068b2aba4b3a5f9ea83b6a8f1da04c229d03fe80308bfa"
+  },
+  {
+    "id": "macos",
+    "title": "Apple",
+    "hex": "000000",
+    "source": "https://www.apple.com",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/apple.svg",
+    "upstreamSHA256": "2a1509dccd25e6d2bc7a11a8e52941077e1a48555e192ce638699b9f083c2a7c"
+  },
+  {
+    "id": "freebsd",
+    "title": "FreeBSD",
+    "hex": "AB2B28",
+    "source": "https://www.freebsdfoundation.org/about/project/",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/freebsd.svg",
+    "upstreamSHA256": "57c61b8658266e79ae3d753d367ebb56d5157e929fc72b2bc6ba7fe7a1059584"
+  },
+  {
+    "id": "alpine",
+    "title": "Alpine Linux",
+    "hex": "0D597F",
+    "source": "https://alpinelinux.org",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/alpinelinux.svg",
+    "upstreamSHA256": "d37d0a7873c65174308d63929f09ab93c3aaa7f5c5df79cdec4be532e015fc98"
+  },
+  {
+    "id": "centos",
+    "title": "CentOS",
+    "hex": "262577",
+    "source": "https://wiki.centos.org/ArtWork/Brand/Logo",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/centos.svg",
+    "upstreamSHA256": "94a3ca4414ed77c8bdf1ff0bd6d40d64ac4e27bd863889af50044ab6167ce1fa"
+  },
+  {
+    "id": "rocky",
+    "title": "Rocky Linux",
+    "hex": "10B981",
+    "source": "https://github.com/rocky-linux/branding/blob/94e97dd30b87d909cc4f6a6838a2926f77f9ac47/logo/src/icon-black.svg",
+    "license": {
+      "type": "CC-BY-SA-4.0"
+    },
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/rockylinux.svg",
+    "upstreamSHA256": "a65476b168c4ef14c6b743e7eb3875e56c9d60ca15bbaef57a72a6cdeab242d0"
+  },
+  {
+    "id": "alma",
+    "title": "AlmaLinux",
+    "hex": "000000",
+    "source": "https://almalinux.org",
+    "guidelines": "https://almalinux.org/p/the-almalinux-os-trademark-usage-policy/",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/almalinux.svg",
+    "upstreamSHA256": "d31e95e025c2299efb0fcbf64965081c5815ae32a54ad39db20b0c16327a6ef6"
+  },
+  {
+    "id": "opensuse",
+    "title": "openSUSE",
+    "hex": "73BA25",
+    "source": "https://github.com/openSUSE/artwork/blob/33e94aa76837c09f03d1712705949b71a246a53b/logos/buttons/button-colour.svg",
+    "guidelines": "https://en.opensuse.org/Portal:Artwork",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/opensuse.svg",
+    "upstreamSHA256": "22f842b1d6b2cf32b7b1a569708c2ca73bd5cae627def4e45e15d07915f0d6bf"
+  },
+  {
+    "id": "gentoo",
+    "title": "Gentoo",
+    "hex": "54487A",
+    "source": "https://wiki.gentoo.org/wiki/Project:Artwork/Artwork#Variations_of_the_.22g.22_logo",
+    "guidelines": "https://www.gentoo.org/inside-gentoo/foundation/name-logo-guidelines.html",
+    "license": {
+      "type": "CC-BY-SA-2.5"
+    },
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/gentoo.svg",
+    "upstreamSHA256": "894c74754481396130effc60dc3f3a4022bfa863c1ec78344f3c77bb9b73851f"
+  },
+  {
+    "id": "nixos",
+    "title": "NixOS",
+    "hex": "5277C3",
+    "source": "https://brand.nixos.org/logos/nixos-logomark-black-flat-minimal.svg",
+    "guidelines": "https://brand.nixos.org/documents/nixos-branding-guide.pdf",
+    "license": {
+      "type": "CC-BY-4.0"
+    },
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/nixos.svg",
+    "upstreamSHA256": "08e3442ba2b81fd8bb50c745ab354b96128a80e8884969f7dace33fe7d15a921"
+  },
+  {
+    "id": "raspbian",
+    "title": "Raspberry Pi",
+    "hex": "A22846",
+    "source": "https://www.raspberrypi.org/trademark-rules",
+    "guidelines": "https://www.raspberrypi.org/trademark-rules",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/raspberrypi.svg",
+    "upstreamSHA256": "ab35cdb6cfd69779dfa54c8f15f0ed3c514ff6c07f1c941dd47a61115a208c59"
+  },
+  {
+    "id": "kali",
+    "title": "Kali Linux",
+    "hex": "557C94",
+    "source": "https://www.kali.org/docs/policy/trademark/",
+    "guidelines": "https://www.kali.org/docs/policy/trademark/",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/kalilinux.svg",
+    "upstreamSHA256": "0ceffe5e8ce02aae42f7f5f6cada390f79e5ab6450a4e460b03127a370c33a1a"
+  },
+  {
+    "id": "mint",
+    "title": "Linux Mint",
+    "hex": "86BE43",
+    "source": "https://github.com/linuxmint/brand-logo/blob/540ac3b08e987866d77a340f557f994c988ac2ae/ring-mono-green.svg",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/linuxmint.svg",
+    "upstreamSHA256": "ab7e227a8e7b7d167d8bc4617c6323c205b4565ce1c206e6d1fd677669cd27d4"
+  },
+  {
+    "id": "manjaro",
+    "title": "Manjaro",
+    "hex": "35BFA4",
+    "source": "https://manjaro.org",
+    "assetURL": "https://raw.githubusercontent.com/simple-icons/simple-icons/e451c581fccb01b56f47e1a77292bdd1fd95b1a4/icons/manjaro.svg",
+    "upstreamSHA256": "b2d57d08c236453310773ca2f12163ce53e6757ba1698c10a8c0d39ac7cf0019"
+  },
+  {
+    "id": "linux",
+    "assetURL": "https://raw.githubusercontent.com/torvalds/linux/a91337fb5e8e0127c8b5be87be9f3027f95b48bc/Documentation/images/logo.svg",
+    "upstreamSHA256": "a31038faddfc457ada7948ab18c5cd8bad68863f5520144d5cbed5acb84f7b33"
+  },
+  {
+    "id": "windows",
+    "assetURL": "https://raw.githubusercontent.com/devicons/devicon/32fe1d3b3f36ad11f90ab94f7db59738139c2bf6/icons/windows11/windows11-original.svg",
+    "upstreamSHA256": "11ac9b1e84c8c36c21629d03f26ce699b7d2e56bf702ea2e8eb2637cd2271c56"
+  },
+  {
+    "id": "openwrt",
+    "assetURL": "https://raw.githubusercontent.com/openwrt/branding/a6e1b9caefc18487047f182613787e9d56146001/logo/openwrt_logo_blue_and_dark_blue.svg",
+    "upstreamSHA256": "b0daee964763ad02be46415ab2d5990ef1dbc0511e8c5f7cb0d0113104aa1f9d"
+  },
+  {
+    "id": "openwrt-dark",
+    "assetURL": "https://raw.githubusercontent.com/openwrt/branding/a6e1b9caefc18487047f182613787e9d56146001/logo/openwrt_logo_white_and_blue.svg",
+    "upstreamSHA256": "83bc33827844328cdf3b99631db88331e7ceecdd5efbb61604fab6e963f2aa53"
+  }
+]

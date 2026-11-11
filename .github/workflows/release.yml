@@ -1,0 +1,118 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      TERMVIA_DIAGNOSTICS: '0'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build arm64 application
+        run: make app
+
+      - name: Check packaged startup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          logs = Path(os.environ['RUNNER_TEMP'])
+          output, errors = logs / 'startup.log', logs / 'startup-errors.log'
+          result = subprocess.run([
+              '/usr/bin/open', '-n', '-W', str(Path('build/Termvia.app').resolve()),
+              '--stdout', str(output), '--stderr', str(errors),
+              '--args', '-ApplePersistenceIgnoreState', 'YES', '--launch-check'
+          ], timeout=180)
+          text = output.read_text() if output.exists() else ''
+          print(text)
+          if errors.exists():
+              print(errors.read_text())
+          if result.returncode != 0 or 'Termvia startup check passed' not in text:
+              raise SystemExit('Packaged startup failed')
+          PY
+
+      - name: Package release assets
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: bash scripts/package-release.sh
+
+      - name: Upload application and checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Termvia-macos-arm64
+          path: |
+            dist/Termvia-*-macos-arm64.zip
+            dist/Termvia-*-macos-arm64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Download verified build assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Termvia-macos-arm64
+          path: dist
+
+      - name: Verify assets and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          archive="Termvia-$version-macos-arm64.zip"
+          (cd dist && sha256sum -c "$archive.sha256")
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          Native Apple Silicon build. Requires macOS 27 or later.
+
+          Download the ZIP, extract Termvia.app, and move it to Applications.
+          This build is ad-hoc signed and is not notarized with Apple.
+          NOTES
+          gh release create "$RELEASE_TAG" "dist/$archive" "dist/$archive.sha256" \
+            --verify-tag --title "Termvia $version" --notes-file "$RUNNER_TEMP/release-notes.md"
+
+      - name: Keep only the current release build record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs=$(gh api --paginate "repos/$GH_REPO/actions/runs?per_page=100" \
+            --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID and .status == \"completed\") | .id")
+          for run in $runs; do
+            gh api --method DELETE "repos/$GH_REPO/actions/runs/$run"
+          done

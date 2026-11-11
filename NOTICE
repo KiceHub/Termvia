@@ -1,0 +1,36 @@
+Termvia
+Copyright © 2026 Mr.K.
+
+Termvia's original source code, documentation and original application artwork
+are licensed under the Apache License, Version 2.0. See LICENSE.
+
+Third-party components and operating-system marks retain their own licenses
+and ownership. The Apache License does not relicense these assets or grant
+rights to third-party names and trademarks.
+
+SwiftTerm 1.99.2: MIT license, Miguel de Icaza and the other copyright holders
+listed in SwiftTerm-LICENSE.txt, included in the packaged application's Resources.
+
+PuTTY 0.85 (puttygen): MIT license, Simon Tatham and contributors.
+See PuTTY-LICENSE.txt in the packaged application's Resources.
+
+Host operating-system icons:
+- Tux: Larry Ewing (created using The GIMP), Garrett LeSage, and IFo Hancroft;
+  freely usable with attribution, as specified in COPYING-Tux.txt.
+- Windows mark from Devicon: MIT license, konpa and contributors.
+- Simple Icons collection: CC0; the original marks' additional licenses and
+  trademark policies remain applicable.
+- Debian mark: Software in the Public Interest, Inc.; CC-BY-SA-3.0.
+  https://creativecommons.org/licenses/by-sa/3.0/
+- Rocky Linux mark: Rocky Enterprise Software Foundation; CC-BY-SA-4.0.
+  https://creativecommons.org/licenses/by-sa/4.0/
+- Gentoo mark: Gentoo Foundation, Inc.; CC-BY-SA-2.5.
+  https://creativecommons.org/licenses/by-sa/2.5/
+- NixOS mark: NixOS contributors; CC-BY-4.0.
+  https://creativecommons.org/licenses/by/4.0/
+- OpenWrt: original marks from openwrt/branding, subject to the OpenWrt
+  trademark policy; no endorsement or affiliation is implied.
+
+Detailed icon attribution and license terms are included in
+Sources/Termvia/Resources/HostIcons/NOTICE.md and sources.json, and bundled
+with the application. Modified Debian icons retain CC-BY-SA-3.0.

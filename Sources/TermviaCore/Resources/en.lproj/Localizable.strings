@@ -1,0 +1,692 @@
+// Termvia UI strings. Stable keys are independent of the selected language.
+"1 / 5 / 15 分钟负载" = "1 / 5 / 15 Minute Load";
+"CPU 使用率" = "CPU Usage";
+"Local" = "Local";
+"SFTP 目录读取失败，退出码 %d" = "SFTP directory listing failed, exit code %d";
+"SSH 进程运行中" = "SSH Process Running";
+"SSH 连接或认证失败，请查看终端错误，再重新连接。" = "SSH connection or authentication failed. Check the terminal before reconnecting.";
+"上一个会话" = "Previous Session";
+"上一级目录" = "Parent Directory";
+"上传" = "Upload";
+"上传 %d 个文件" = "Upload (%d)";
+"上传 / 下载速率" = "Upload / Download Rate";
+"下一个会话" = "Next Session";
+"下载" = "Download";
+"下载文件" = "Download File";
+"不支持的主机配置版本：%d" = "Unsupported host settings version: %d";
+"主机" = "Hosts";
+"主机 · ⌘N" = "Hosts · ⌘N";
+"主机标识重复" = "Duplicate host identifier";
+"主机管理" = "Host Manager";
+"主机管理…" = "Host Manager…";
+"会话" = "Sessions";
+"传输" = "Transfers";
+"传输 (%d)" = "Transfers (%d)";
+"传输中" = "Transferring";
+"保存" = "Save";
+"停止" = "Stop";
+"全选" = "Select All";
+"全部显示" = "Show All";
+"全部" = "All";
+"未检测到物理网卡" = "No physical network interfaces";
+"未检测到物理磁盘" = "No physical disks";
+"全部置前" = "Bring All to Front";
+"关于 Termvia" = "About Termvia";
+"关闭" = "Close";
+"关闭 %@" = "Close %@";
+"关闭…" = "Close…";
+"关闭会话：%@" = "Closed session: %@";
+"关闭当前会话…" = "Close Current Session…";
+"关闭窗口" = "Close Window";
+"关闭终端会话？" = "Close This Terminal?";
+"内存" = "Memory";
+"准备启动" = "Ready";
+"减小字体" = "Decrease Font Size";
+"减小终端字体" = "Decrease Terminal Font";
+"分组" = "Group";
+"删除" = "Delete";
+"删除…" = "Delete…";
+"删除此主机配置？" = "Delete This Host?";
+"删除配置后，已打开的终端和传输继续运行；已保存的主机指纹保留。" = "Open terminals and transfers will continue. Saved host fingerprints will be kept.";
+"刷新目录" = "Refresh Directory";
+"剪切" = "Cut";
+"协议" = "Protocol";
+"原主机配置读取失败，已保留文件。请修复 hosts.json 并重新打开应用：%@" = "The original host settings could not be read and were preserved. Repair hosts.json and reopen the app: %@";
+"取消" = "Cancel";
+"可选" = "Optional";
+"名称" = "Name";
+"启动失败" = "Launch Failed";
+"地址" = "Address";
+"增大字体" = "Increase Font Size";
+"增大终端字体" = "Increase Terminal Font";
+"复制" = "Copy";
+"大小" = "Size";
+"失败" = "Failed";
+"完成" = "Done";
+"工作区" = "Workspace";
+"工作区设置" = "Workspace Settings";
+"已取消" = "Cancelled";
+"已终止" = "Terminated";
+"已结束" = "Ended";
+"已退出（%d）" = "Exited (%d)";
+"帮助" = "Help";
+"成功" = "Completed";
+"打开" = "Open";
+"打开会话：%@" = "Opened session: %@";
+"排队中" = "Queued";
+"搜索主机" = "Search Hosts";
+"撤销" = "Undo";
+"操作失败" = "Operation Failed";
+"文件" = "Files";
+"文件面板" = "File Panel";
+"文件面板 · ⌥⌘B" = "File Panel · ⌥⌘B";
+"新增" = "Add";
+"新建主机" = "New Host";
+"新建会话" = "New Session";
+"新建本地终端" = "New Local Terminal";
+"无传输" = "No Transfers";
+"无日志" = "No Logs";
+"无法保存工作区设置：%@" = "Cannot save workspace settings: %@";
+"无法创建 Termvia 数据目录：%@" = "Cannot create the Termvia data folder: %@";
+"无法导出 UI 预览" = "Cannot export UI preview";
+"无法执行 %@，请检查文件是否存在以及执行权限。" = "Cannot run %@. Check that the file exists and is executable.";
+"无法读取主机配置：%@" = "Cannot read host settings: %@";
+"无法读取工作区设置：%@" = "Cannot read workspace settings: %@";
+"无法读取目录" = "Cannot Read Directory";
+"日志" = "Logs";
+"显示工具栏" = "Show Toolbar";
+"显示底部面板" = "Show Bottom Panel";
+"显示系统监控" = "Show Monitor";
+"最小化" = "Minimize";
+"服务" = "Services";
+"未分组" = "Ungrouped";
+"未连接" = "Not Connected";
+"未采样" = "Not Sampled";
+"本地" = "Local";
+"本地和远程路径必须是绝对路径" = "Local and remote paths must be absolute";
+"本地终端" = "Local Terminal";
+"本地终端 · ⌘T" = "Local Terminal · ⌘T";
+"正在停止" = "Stopping";
+"正在取消" = "Cancelling";
+"浅色" = "Light";
+"深色" = "Dark";
+"添加" = "Add";
+"点击读取目录以加载此主机。" = "Refresh to list this host’s directory.";
+"用户名" = "Username";
+"监控" = "Monitor";
+"监控 · ⌥⌘M" = "Monitor · ⌥⌘M";
+"目标中的同名文件将被覆盖。请确认远程目录和文件名。" = "Files with matching names will be overwritten. Confirm the remote directory and filenames.";
+"确定" = "OK";
+"磁盘用量" = "Disk Usage";
+"私钥" = "Private Key";
+"空目录" = "Empty Directory";
+"窗口" = "Window";
+"端口" = "Port";
+"粘贴" = "Paste";
+"系统" = "System";
+"系统监控尚未启用" = "System monitoring is not enabled yet";
+"终端操作" = "Terminal Action";
+"继续使用" = "Keep Using";
+"编辑" = "Edit";
+"编辑主机" = "Edit Host";
+"缩放" = "Zoom";
+"聚焦终端" = "Focus Terminal";
+"设置" = "Settings";
+"设计预览 · 示例" = "Design Preview · Sample Data";
+"语言" = "Language";
+"语言 / Language" = "语言 / Language";
+"请先打开远程会话" = "Open a remote session first";
+"请检查主机地址、用户名、端口和密钥路径" = "Check the host address, username, port, and private key path";
+"跟随系统" = "Follow System";
+"路径" = "Path";
+"路径包含不支持的控制字符" = "The path contains unsupported control characters";
+"输入单个远程文件路径；当前版本只支持文件。" = "Enter one remote file path. Only files are currently supported.";
+"进入全屏" = "Enter Full Screen";
+"进程运行中" = "Process Running";
+"远程" = "Remote";
+"远程文件的绝对路径" = "Absolute Remote File Path";
+"远程目录绝对路径" = "Absolute Remote Directory";
+"连接" = "Connect";
+"连接与认证结果显示在终端内；请完成指纹确认或登录。" = "Connection and authentication appear in the terminal. Confirm the host fingerprint or sign in.";
+"连接主机 · ⌘N" = "Connect Host · ⌘N";
+"退出" = "Quit";
+"退出 Termvia" = "Quit Termvia";
+"退出 Termvia？" = "Quit Termvia?";
+"退出会关闭终端会话并取消尚未完成的传输。" = "Quitting closes terminal sessions and cancels unfinished transfers.";
+"退出全屏" = "Exit Full Screen";
+"退出码 %d：%@" = "Exit code %d: %@";
+"选择保存位置" = "Choose Save Location";
+"选择本地目录" = "Choose Local Directory";
+"选择私钥" = "Choose Private Key";
+"重做" = "Redo";
+"重新打开" = "Reopen";
+"重新打开会话：%@" = "Reopened session: %@";
+"重新连接" = "Reconnect";
+"重新连接…" = "Reconnect…";
+"重新连接此会话？" = "Reconnect This Session?";
+"重置布局" = "Reset Layout";
+"隐藏 Termvia" = "Hide Termvia";
+"隐藏其他" = "Hide Others";
+"隐藏工具栏" = "Hide Toolbar";
+"面板" = "Panel";
+"默认终端字体" = "Default Terminal Font";
+"menu.file" = "File";
+"显示或隐藏监控" = "Show or Hide Monitor";
+"显示或隐藏底部面板" = "Show or Hide Bottom Panel";
+"侧栏" = "Sidebar";
+"侧栏 · ⌥⌘M" = "Sidebar · ⌥⌘M";
+"显示或隐藏侧栏" = "Show or Hide Sidebar";
+"显示侧栏" = "Show Sidebar";
+"新增主机" = "New Host";
+"编辑…" = "Edit…";
+"无主机" = "No Hosts";
+"没有匹配的主机" = "No Matching Hosts";
+
+"自动" = "Automatic";
+"密码" = "Password";
+"认证" = "Authentication";
+"自定义" = "Custom";
+"登录信息" = "Login";
+"保存登录信息" = "Save Login";
+"编辑登录信息" = "Edit Login";
+"密钥口令" = "Key Passphrase";
+"密码或密钥口令" = "Password or Key Passphrase";
+"连接 %@" = "Connect to %@";
+"信任并连接" = "Trust and Connect";
+"共享于 %d 台主机" = "Used by %d hosts";
+"不保存；留空则连接时询问" = "Not saved. Leave blank to enter when connecting.";
+"可选；留空则连接时询问" = "Optional. Leave blank to enter when connecting.";
+"留空保留已保存的密码或口令" = "Leave blank to keep the saved password or passphrase.";
+"移除已保存的密码或口令" = "Remove Saved Password or Passphrase";
+"仅可删除未被主机使用的登录信息" = "Only unused logins can be deleted.";
+"删除此登录信息？" = "Delete this login?";
+"请输入凭据名称并选择认证方式" = "Enter a login name and choose an authentication method.";
+"请选择私钥文件" = "Choose a private key file.";
+"选择私钥文件" = "Choose Private Key File";
+"请先解除主机对该登录信息的引用" = "Remove this login from its hosts before deleting it.";
+"找不到已保存的登录信息，请重新选择" = "Saved login not found. Choose another login.";
+"无法读取登录信息：%@" = "Cannot read saved logins: %@";
+"不支持的凭据配置版本" = "Unsupported login configuration version.";
+"凭据名称或标识重复" = "Duplicate login name or identifier.";
+"密码或口令不能包含换行或空字符" = "Passwords and passphrases cannot contain newlines or null characters.";
+"认证辅助程序缺失，请重新构建应用" = "Authentication helper is missing. Rebuild the app.";
+"无法创建认证通道" = "Cannot create the authentication channel.";
+"认证通道路径过长" = "Authentication channel path is too long.";
+"认证通道已关闭" = "Authentication channel closed.";
+"认证通道拒绝访问" = "Authentication channel access denied.";
+"认证请求过长" = "Authentication request is too long.";
+"认证验证参数错误" = "Invalid authentication probe arguments.";
+"传输参数错误" = "Invalid transfer arguments.";
+"并发参数错误" = "Invalid parallel transfer arguments.";
+"取消验证参数错误" = "Invalid cancellation probe arguments.";
+"取消任务意外完成" = "Cancelled operation unexpectedly completed.";
+"未知操作" = "Unknown operation.";
+
+"保存…" = "Save…";
+
+/* File workflow and host trust */
+"%d 项" = "%d items";
+"SFTP 返回了无效数据" = "The SFTP server returned invalid data.";
+"SFTP 连接已关闭：%@" = "SFTP connection closed: %@";
+"SFTP 错误 %d：%@" = "SFTP error %d: %@";
+"下次连接必须重新核对并确认指纹。已打开的会话不会中断；同一地址的配置共用此信任记录。" = "Verify and confirm the fingerprint on the next connection. Open sessions will continue. Profiles for the same address share this trust record.";
+"主机指纹" = "Host Fingerprints";
+"主机指纹…" = "Host Fingerprints…";
+"仅删除空文件夹，不递归删除；远程删除无法撤销。" = "Only empty folders are removed. Remote deletion cannot be undone.";
+"修改时间" = "Modified";
+"创建" = "Create";
+"删除所选项目？" = "Delete selected items?";
+"另存为…" = "Save As…";
+"已选 %d 项" = "%d selected";
+"忘记指纹" = "Forget Fingerprints";
+"忘记指纹…" = "Forget Fingerprints…";
+"忘记此地址的主机指纹？" = "Forget fingerprints for this address?";
+"文件夹" = "Folder";
+"文件已存在：%@" = "File already exists: %@";
+"文件操作参数错误" = "Invalid file operation arguments.";
+"文件操作超时，请重试" = "File operation timed out. Try again.";
+"新建文件夹" = "New Folder";
+"新建文件夹…" = "New Folder…";
+"显示隐藏文件" = "Show Hidden Files";
+"服务器未提供兼容的 SFTP v3" = "The server does not provide compatible SFTP v3.";
+"没有已保存的主机指纹" = "No saved host fingerprints";
+"目录条目过多，请缩小目录范围" = "Too many directory entries. Choose a smaller directory.";
+"移到废纸篓" = "Move to Trash";
+"移到废纸篓…" = "Move to Trash…";
+"移到废纸篓？" = "Move to Trash?";
+"覆盖" = "Overwrite";
+"请输入有效的单个文件名" = "Enter a valid single filename.";
+"请选择普通文件；目录和符号链接不自动跟随" = "Select regular files. Folders and symbolic links are not followed automatically.";
+"读取目录" = "Load Directory";
+"跳过" = "Skip";
+"重命名" = "Rename";
+"重命名…" = "Rename…";
+"下载目标是符号链接，请选择其他文件名" = "The download destination is a symbolic link. Choose another filename.";
+"下载目标是文件夹，请选择其他文件名" = "The download destination is a folder. Choose another filename.";
+
+/* Audit fixes */
+"进程执行器不可重复使用" = "A process runner can only be used once.";
+"密码或口令过长" = "The password or passphrase is too long.";
+"下载目标必须是普通文件或尚不存在" = "The download destination must be a regular file or not yet exist.";
+"下载暂存文件已关闭" = "The download staging file is closed.";
+"下载目录已改变，请重新选择" = "The download directory changed. Choose it again.";
+"下载暂存结果不是普通文件" = "The downloaded staging result is not a regular file.";
+"退出会关闭终端，并取消未完成的文件操作和传输。" = "Quitting closes terminals and cancels unfinished file operations and transfers.";
+
+/* Connections and live monitoring */
+"文件传输" = "File Transfer";
+"仅本机保存；留空保留已有密码" = "Saved locally; leave blank to keep the saved password.";
+"无法读取本地登录信息" = "Cannot read the locally saved login.";
+"正在连接" = "Connecting";
+"已连接：%@" = "Connected: %@";
+"服务器公钥已变更，连接已阻止。请核对指纹后再重新信任。" = "The server host key changed. Connection blocked. Verify the fingerprint before trusting it again.";
+"隐藏底部面板" = "Hide Bottom Panel";
+"监控数据无效或超出限制" = "Monitoring data is invalid or exceeds limits.";
+"等待连接" = "Waiting for Connection";
+"正在采样" = "Sampling";
+"实时" = "Live";
+"监控失败" = "Monitoring Failed";
+"监控已断开" = "Monitoring Disconnected";
+"仅支持 Linux 和 macOS 监控" = "Linux and macOS Monitoring Only";
+"已暂停" = "Paused";
+"数据已过期" = "Data Is Stale";
+"重新采样" = "Restart Sampling";
+"等待 SSH 连接" = "Waiting for SSH Connection";
+"网卡" = "Network Interface";
+"磁盘" = "Disk";
+"文件系统" = "Filesystems";
+"容量 %@" = "Capacity %@";
+"%d 核 · 运行 %@" = "%d cores · Uptime %@";
+"指标" = "Metric";
+"时间" = "Time";
+"读取" = "Read";
+"写入" = "Write";
+"接收" = "Receive";
+"发送" = "Send";
+"已保存" = "Saved";
+"信任此服务器公钥？" = "Trust this server host key?";
+"允许" = "Allow";
+
+"长按或连按两次 ⌘Q 退出" = "Hold or press ⌘Q twice to quit";
+
+"关闭当前会话" = "Close Current Session";
+
+"负载" = "Load";
+
+"1 / 5 / 15 分钟平均负载" = "1 / 5 / 15 minute load averages";
+"SSH 目录返回了无效数据" = "The SSH directory response is invalid.";
+"SCP 模式暂不支持远程重命名，请切换到 SFTP" = "Remote rename is unavailable in SCP mode. Switch to SFTP to rename.";
+"设置…" = "Settings…";
+"新建标签页" = "New Tab";
+"外观" = "Appearance";
+"通用" = "General";
+"字体大小：%d" = "Font size: %d";
+"回滚行数" = "Scrollback lines";
+"优先采用远端配色" = "Prefer remote colors";
+"保留远端通过 ANSI／OSC 提供的颜色；未提供时使用基础配色。关闭后固定使用本地调色板。" = "Preserve colors provided by the remote shell via ANSI/OSC; otherwise use the base palette. Turn off to keep the local palette.";
+"基础配色" = "Base palette";
+"文字" = "Text";
+"背景" = "Background";
+"光标" = "Cursor";
+"ANSI 调色板" = "ANSI Palette";
+"ANSI 颜色 %d" = "ANSI color %d";
+"重置自定义配色" = "Reset Custom Palette";
+"终端配色预览" = "Terminal color preview";
+"终端" = "Terminal";
+"自动重连" = "Reconnect automatically";
+"重试次数：%d" = "Retry limit: %d";
+"首次重试间隔：%d 秒" = "Initial retry delay: %d seconds";
+"仅重连意外断开的 SSH 会话，逐次延长等待，最长 30 秒。正常退出、手动停止、认证或主机公钥错误不会自动重试。不会恢复远端命令。" = "Reconnect unexpectedly disconnected SSH sessions with increasing delays, up to 30 seconds. Normal exits, manual stops, authentication and host-key errors are not retried. Remote commands are not restored.";
+"Termvia 设置" = "Termvia Settings";
+"起始页" = "Start Page";
+"选择主机以连接" = "Choose a host to connect";
+"等待自动重连" = "Waiting to reconnect";
+"无法读取设置，已保留原文件：%@" = "Unable to read settings. The original file was preserved: %@";
+"无法保存设置：%@" = "Unable to save settings: %@";
+"将在 %.0f 秒后自动重连 %@（%d）" = "Retrying in %.0f seconds: %@ (attempt %d)";
+"连接主机" = "Connect to Host";
+"松开 Q 以退出" = "Release Q to Quit";
+"按住 ⌘Q 退出 Termvia" = "Hold ⌘Q to Quit Termvia";
+"正在准备退出…" = "Preparing to quit…";
+"也可连按两次 ⌘Q；Esc 取消" = "Or press ⌘Q twice; Esc to cancel";
+"更多" = "More";
+"目录空白区域" = "Directory blank area";
+"右键打开目录操作" = "Right-click for directory actions";
+"本地家目录" = "Local Home";
+"远程家目录" = "Remote Home";
+"上传到远程目录" = "Upload to Remote Directory";
+"下载到本地目录" = "Download to Local Directory";
+"复制到…" = "Copy To…";
+"移动到…" = "Move To…";
+"新建文件…" = "New File…";
+"新建文件" = "New File";
+"复制到远程目录" = "Copy to Remote Directory";
+"移动到远程目录" = "Move to Remote Directory";
+"复制到本地目录" = "Copy to Local Directory";
+"移动到本地目录" = "Move to Local Directory";
+"上传所选本地文件" = "Upload Selected Local Files";
+"无法读取主机布局，已保留原文件：%@" = "Unable to read host layouts. The original file was preserved: %@";
+"请先读取远程目录" = "Read the remote directory first.";
+"请切换到来源主机后再操作" = "Switch to the source host before continuing.";
+"目标必须是普通文件或尚不存在" = "The destination must be a regular file or absent.";
+"不能将项目复制或移动到自身目录" = "An item cannot be copied or moved into itself.";
+"不支持的工作区版本" = "Unsupported workspace version.";
+
+"传输前确认" = "Confirm before transferring";
+"拖拽或右键上传、下载前确认来源与目标。此设置不关闭同名文件冲突提示。" = "Confirm sources and destination before drag-and-drop or context-menu transfers. File conflict prompts stay enabled.";
+"文件夹上传未完成，远端可能保留部分内容。" = "Folder upload did not finish. Partial contents may remain on the remote host.";
+"请先关闭当前对话框后再传输" = "Close the current dialog before transferring.";
+"确认上传？" = "Confirm Upload?";
+"确认下载？" = "Confirm Download?";
+"来源：%@\n目标：%@\n共 %d 项；文件夹包含其子目录与文件。" = "From: %@\nTo: %@\n%d items; folders include their subfolders and files.";
+"开始传输" = "Start Transfer";
+"不再提示" = "Do not ask again";
+"目标文件夹已存在：%@" = "Destination folder already exists: %@";
+"请选择文件或文件夹，不支持符号链接" = "Select files or folders. Symbolic links are not supported.";
+"文件夹过大或层级过深" = "The folder is too large or nested too deeply.";
+"文件夹传输不跟随符号链接或特殊文件" = "Folder transfers do not follow symbolic links or special files.";
+"传输源目录已改变，请重新选择" = "The source folder has changed. Select it again.";
+"下载暂存结果类型不匹配" = "The staged download has an unexpected type.";
+
+"文件夹已存在：%@" = "Folder already exists: %@";
+"合并" = "Merge";
+"合并会保留目标独有内容；同名文件仍逐项询问是否覆盖。" = "Merging keeps destination-only items. Files with the same name will each ask before replacement.";
+"是否覆盖目标中的同名文件？" = "Replace the file with the same name at the destination?";
+"目标类型不同或为符号链接：%@" = "The destination has a different type or is a symbolic link: %@";
+"已跳过" = "Skipped";
+"已跳过 %d 项" = "Skipped %d items";
+"文件夹传输未完成，已完成的内容会保留。" = "Folder transfer did not finish. Completed items are kept.";
+
+"默认分组" = "Default";
+
+"开启" = "On";
+
+"不可恢复。" = "This cannot be undone.";
+
+"来源" = "From";
+
+"目标" = "To";
+
+"无效的删除路径" = "Invalid deletion path";
+
+"将关闭所有标签页并取消未完成的传输。" = "All tabs will close and unfinished transfers will be cancelled.";
+
+"主机名称已存在" = "A host with this name already exists";
+
+"分组名称为空或已存在" = "The group name is empty or already exists";
+
+"新建分组…" = "New Group…";
+
+"新建分组" = "New Group";
+
+"主机图标" = "Host Icon";
+
+"请输入密码或选择密钥" = "Enter a password or select a key";
+
+"密钥口令（可为空）" = "Key passphrase (optional)";
+
+"密钥和密码" = "Key and Password";
+
+"共享登录信息" = "Shared Logins";
+
+"主机登录信息" = "Host Logins";
+
+"重命名标签页…" = "Rename Tab…";
+
+"重命名标签页" = "Rename Tab";
+
+"恢复默认名称" = "Reset Tab Name";
+
+"留空恢复默认名称" = "Leave empty to restore the default name";
+
+"本地终端 %@" = "Local terminal %@";
+
+"已打开" = "Opened";
+
+"密钥" = "Key";
+
+"已验证的认证" = "Verified authentication";
+
+"远程连接 通过%@ 连接到 %@" = "Remote connection using %@ to %@";
+
+"密钥交换 %@" = "Key exchange %@";
+
+"远程连接 %@" = "Remote connection %@";
+
+"磁盘已用容量" = "Used disk capacity";
+
+"重新连接 %@" = "Reconnect %@";
+
+"已用 %@，剩余 %@" = "Used %@, remaining %@";
+
+"屏蔽 OpenSSH 警告" = "Hide OpenSSH warnings";
+
+"按住 ⌘Q 退出" = "Hold ⌘Q to quit";
+
+"关于" = "About";
+
+"版本" = "Version";
+
+"构建时间" = "Built";
+
+"作者" = "Author";
+
+"版权" = "Copyright";
+
+"主题" = "Theme";
+
+"请选择有效的系统图标" = "Choose a valid system symbol";
+
+"图标与颜色…" = "Icon and Color…";
+
+"分组外观" = "Group Appearance";
+
+"搜索图标" = "Search symbols";
+
+"颜色" = "Color";
+
+"默认" = "Default";
+
+"恢复默认" = "Restore Defaults";
+
+"服务器" = "Server";
+
+"台式电脑" = "Desktop";
+
+"笔记本电脑" = "Laptop";
+
+"全球" = "Global";
+
+"云端" = "Cloud";
+
+"主页" = "Home";
+
+"建筑" = "Building";
+
+"容器" = "Container";
+
+"归档" = "Archive";
+
+"集群" = "Cluster";
+
+"星标" = "Star";
+
+"喜爱" = "Favorite";
+
+"旗标" = "Flag";
+
+"标签" = "Tag";
+
+"闪电" = "Lightning";
+
+"树叶" = "Leaf";
+
+"火焰" = "Flame";
+
+"安全" = "Security";
+
+"锁定" = "Lock";
+
+"命令" = "Command";
+
+"无线网络" = "Wi-Fi";
+
+"红色" = "Red";
+
+"橙色" = "Orange";
+
+"绿色" = "Green";
+
+"青色" = "Teal";
+
+"蓝色" = "Blue";
+
+"紫色" = "Purple";
+
+"粉色" = "Pink";
+
+"灰色" = "Gray";
+
+"黄色" = "Yellow";
+
+"棕色" = "Brown";
+
+"编辑分组" = "Edit Group";
+
+"编辑分组…" = "Edit Group…";
+
+"分组已不存在" = "The group no longer exists";
+
+"分组保存失败，无法恢复主机配置：%@" = "Could not save the group or restore the host configuration: %@";
+
+"默认分组名称不可修改" = "The default group name cannot be changed";
+
+"已展开" = "Expanded";
+
+"已折叠" = "Collapsed";
+
+"旧终端尚未退出，请稍后重连" = "The previous terminal is still closing. Please reconnect shortly.";
+
+"鼠标操作" = "Mouse";
+
+
+
+"无法读取 PPK 私钥" = "Unable to read the PPK private key";
+
+"PPK 私钥文件过大" = "The PPK private key is too large";
+
+"不支持的 PPK 私钥版本" = "Unsupported PPK private key version";
+
+"不支持的 PPK 加密方式" = "Unsupported PPK encryption";
+
+"PPK 密钥派生参数超出支持范围" = "PPK key derivation parameters exceed supported limits";
+
+"PPK 口令不能包含换行或空字符" = "PPK passphrases cannot contain line breaks or null characters";
+
+"PPK 辅助程序缺失，请重新构建应用" = "The PPK helper is missing. Please rebuild the app.";
+
+"PPK 私钥或口令无效" = "Invalid PPK private key or passphrase";
+
+"认证已取消或密钥口令不可用" = "Authentication was cancelled or the key passphrase is unavailable";
+
+"继续" = "Continue";
+
+"右键拷贝/粘贴" = "Right-click to copy/paste";
+
+
+"已断开" = "Disconnected";
+
+"退出码：%d" = "Exit code: %d";
+
+"终端已结束" = "Terminal closed";
+
+"连接已断开" = "Connection closed";
+
+"按回车重新打开" = "Press Return to reopen";
+
+"按回车重新连接" = "Press Return to reconnect";
+
+"远程主机时间" = "Remote host time";
+
+"右键复制/粘贴（左键拷贝）" = "Right-click to copy and paste (left-click to copy)";
+
+"关闭鼠标操作" = "Off";
+
+"左键" = "Left button";
+
+"右键" = "Right button";
+
+"拷贝" = "Copy";
+
+"拷贝/粘贴" = "Copy/paste";
+
+"复制/粘贴" = "Copy and paste";
+
+"双击标签页关闭" = "Double-click tabs to close";
+
+"终端留白" = "Terminal padding";
+
+"左：%d pt" = "Left: %d pt";
+
+"右：%d pt" = "Right: %d pt";
+
+"上：%d pt" = "Top: %d pt";
+
+"下：%d pt" = "Bottom: %d pt";
+
+"快捷键" = "Shortcuts";
+
+"未设置" = "Not set";
+
+"空格" = "Space";
+
+"按下快捷键" = "Press a shortcut";
+
+"恢复默认快捷键" = "Restore default shortcuts";
+
+"请使用 ⌘、⌃ 组合键或功能键" = "Use Command, Control, or a function key";
+
+"此快捷键由系统保留" = "This shortcut is reserved by the system";
+
+"此快捷键已用于%@" = "This shortcut is used by %@";
+
+"光标样式" = "Cursor shape";
+
+"方框" = "Block";
+
+"竖线" = "Bar";
+
+"下划线" = "Underline";
+
+"开源许可" = "License";
+
+"监控刷新间隔：%d 秒" = "Monitor refresh: %d s";
+"监控刷新间隔" = "Monitoring interval";
+"字体大小" = "Font size";
+"重试次数" = "Retry attempts";
+"首次重试间隔" = "Initial retry delay";
+"秒" = "s";
+"行" = "lines";
+"左" = "Left";
+"右" = "Right";
+"上" = "Top";
+"下" = "Bottom";
+"终端显示" = "Display";
+"配色" = "Colors";
+"连接设置" = "Connection";
+"%d 核" = "Cores: %d";
+"运行 %@" = "Uptime %@";
+
+"关闭标签页" = "Close Tab";
+
+"搜索主机指纹" = "Search host fingerprints";
+"刷新" = "Refresh";
+"没有匹配的主机指纹" = "No matching host fingerprints";
+"隐藏的主机地址" = "Hidden host address";
+"包括已删除主机的信任记录；删除主机配置不会清除此列表。" = "Includes trust records for deleted hosts. Deleting a host configuration keeps these records.";
+"忘记此指纹？" = "Forget this fingerprint?";
+"仅移除此条信任记录。下次连接可能需要重新确认指纹；已打开的会话不会中断。" = "Only this trust record will be removed. The next connection may require fingerprint confirmation. Open sessions will continue.";
+
+"SSH 保活" = "SSH Keep Alive";
+"保活间隔" = "Keep-alive interval";
+"应用于新建或重新建立的 SSH 连接；连续 3 次未响应则断开。" = "Applies to new or re-established SSH connections; disconnects after 3 unanswered probes.";
