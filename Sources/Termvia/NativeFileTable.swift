@@ -23,6 +23,7 @@ struct NativeFileRow: Equatable {
     let open: (Set<String>) -> Void
     let sort: ([(String, Bool)]) -> Void
     let menu: (Set<String>) -> AnyView
+    var allowExternalDrop = false
     @Environment(\.locale) private var locale
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -59,25 +60,45 @@ struct NativeFileRow: Equatable {
         let localeChanged = coordinator.parent.locale != locale
         coordinator.parent = self
         guard let table = coordinator.table else { return }
-        table.isEnabled = context.environment.isEnabled
-        for (index, key) in ["名称", "大小", "修改时间"].enumerated() { table.tableColumns[index].title = T(key) }
-        table.usesAlternatingRowBackgroundColors = !rows.isEmpty
-        coordinator.updating = true
-        if coordinator.rows != rows || localeChanged {
-            coordinator.rows = rows
-            coordinator.currentIDs = Set(rows.map(\.id))
-            table.reloadData()
-        }
-        let indexes = IndexSet(rows.indices.filter { selection.contains(rows[$0].id) })
-        if table.selectedRowIndexes != indexes { table.selectRowIndexes(indexes, byExtendingSelection: false) }
-        coordinator.updating = false
-        scroll.needsLayout = true
+        if table.isEnabled != context.environment.isEnabled { table.isEnabled = context.environment.isEnabled }
+        coordinator.apply(rows: rows, selection: selection, localeChanged: localeChanged, scroll: scroll)
     }
 
     @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         var parent: NativeFileTable
         var rows: [NativeFileRow] = []
         weak var table: NSTableView?
+        #if TERMVIA_DIAGNOSTICS
+        var selectionPasses = 0, layoutRequests = 0
+        #endif
+        private var appliedSelection: Set<String>?
+        func apply(rows: [NativeFileRow], selection: Set<String>, localeChanged: Bool, scroll: FileScrollView) {
+            guard let table else { return }
+            let rowsChanged = self.rows != rows
+            updating = true; defer { updating = false }
+            if localeChanged {
+                for (index, key) in ["名称", "大小", "修改时间"].enumerated() { table.tableColumns[index].title = T(key) }
+            }
+            if rowsChanged || localeChanged {
+                self.rows = rows; currentIDs = Set(rows.map(\.id))
+                table.usesAlternatingRowBackgroundColors = !rows.isEmpty
+                table.reloadData()
+            }
+            if rowsChanged || localeChanged || appliedSelection != selection {
+                #if TERMVIA_DIAGNOSTICS
+                selectionPasses += 1
+                #endif
+                let indexes = IndexSet(rows.indices.filter { selection.contains(rows[$0].id) })
+                if table.selectedRowIndexes != indexes { table.selectRowIndexes(indexes, byExtendingSelection: false) }
+                appliedSelection = selection
+            }
+            if rowsChanged || localeChanged {
+                #if TERMVIA_DIAGNOSTICS
+                layoutRequests += 1
+                #endif
+                scroll.needsLayout = true
+            }
+        }
         var updating = false
         var currentIDs: Set<String> = []
         func tableViewColumnDidResize(_ notification: Notification) {
@@ -97,7 +118,7 @@ struct NativeFileRow: Equatable {
             cell.identifier = identifier; cell.rowID = item.id
             let text: String
             switch key {
-            case "size": text = entry.kind == .file ? entry.size.map { ByteCountFormatter.string(fromByteCount: Int64(clamping: $0), countStyle: .file) } ?? "—" : "—"
+            case "size": text = entry.displayKind == .file ? entry.size.map(FileSizeDisplay.string) ?? "—" : "—"
             case "date": text = entry.modified?.formatted(Date.FormatStyle(date: .numeric, time: .shortened).locale(parent.locale)) ?? "—"
             default: text = entry.displayName
             }
@@ -105,8 +126,10 @@ struct NativeFileRow: Equatable {
             cell.textField?.textColor = key == "name" ? .labelColor : .secondaryLabelColor
             cell.toolTip = key == "name" ? entry.name : text
             if key == "name" {
-                cell.imageView?.image = NSImage(systemSymbolName: entry.kind == .directory ? "folder" : entry.kind == .symbolicLink ? "link" : "doc", accessibilityDescription: nil)
-                if let url = item.localURL {
+                cell.imageView?.image = NSImage(systemSymbolName: entry.displayKind == .directory ? "folder" : "doc", accessibilityDescription: nil)
+                cell.linkBadge.isHidden = entry.kind != .symbolicLink
+                if let localURL = item.localURL {
+                    let url = entry.kind == .symbolicLink ? localURL.resolvingSymlinksInPath() : localURL
                     if let icon = icons[url] { cell.imageView?.image = icon }
                     else if pendingIcons.insert(url).inserted {
                         Task { [weak self, weak cell] in
@@ -125,13 +148,18 @@ struct NativeFileRow: Equatable {
         }
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !updating, let table else { return }
-            parent.selection = Set(table.selectedRowIndexes.compactMap { rows.indices.contains($0) ? rows[$0].id : nil })
+            let selected = Set(table.selectedRowIndexes.compactMap { rows.indices.contains($0) ? rows[$0].id : nil })
+            appliedSelection = selected; parent.selection = selected
         }
         func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
             guard !updating else { return }
             parent.sort(tableView.sortDescriptors.compactMap { descriptor in descriptor.key.map { ($0, descriptor.ascending) } })
         }
-        @objc func doubleClick() { parent.open(parent.selection) }
+        @objc func doubleClick() {
+            guard let table else { return }
+            let ids = Set(table.selectedRowIndexes.compactMap { rows.indices.contains($0) ? rows[$0].id : nil })
+            parent.selection = ids; parent.open(ids)
+        }
         func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
             guard parent.ready, rows.indices.contains(row), let data = try? JSONEncoder().encode(rows[row].payload) else { return nil }
             let item = NSPasteboardItem()
@@ -141,7 +169,7 @@ struct NativeFileRow: Equatable {
         }
         func accepts(_ info: NSDraggingInfo) -> Bool {
             let types = info.draggingPasteboard.types ?? []
-            return parent.ready && (types.contains(NSPasteboard.PasteboardType(FileDragPayload.type)) || types.contains(.fileURL))
+            return parent.ready && (types.contains(NSPasteboard.PasteboardType(FileDragPayload.type)) || (parent.allowExternalDrop && types.contains(.fileURL)))
         }
         func receive(_ info: NSDraggingInfo) -> Bool {
             guard accepts(info) else { return false }
@@ -180,7 +208,8 @@ struct NativeFileRow: Equatable {
                 let spacing = CGFloat(table.tableColumns.count) * table.intercellSpacing.width
                 let otherWidths = table.tableColumns.dropFirst().reduce(CGFloat(0)) { $0 + $1.width }
                 if let name = table.tableColumns.first {
-                    name.width = max(preferredNameWidth, contentView.bounds.width - otherWidths - spacing)
+                    let width = max(preferredNameWidth, contentView.bounds.width - otherWidths - spacing)
+                    if abs(name.width - width) > 0.5 { name.width = width }
                 }
                 let width = table.tableColumns.reduce(CGFloat(0)) { $0 + $1.width } + spacing
                 let height = max(CGFloat(table.numberOfRows) * (table.rowHeight + table.intercellSpacing.height) + 1, contentView.bounds.height)
@@ -197,6 +226,11 @@ struct NativeFileRow: Equatable {
     }
     @MainActor final class FileTableView: NSTableView {
         weak var coordinator: Coordinator?
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func mouseDown(with event: NSEvent) {
+            window?.makeKeyAndOrderFront(nil)
+            super.mouseDown(with: event)
+        }
         override func menu(for event: NSEvent) -> NSMenu? {
             let row = row(at: convert(event.locationInWindow, from: nil))
             if row >= 0, !selectedRowIndexes.contains(row) { selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
@@ -206,6 +240,7 @@ struct NativeFileRow: Equatable {
     }
     @MainActor final class FileCell: NSTableCellView {
         var rowID = ""
+        let linkBadge = NSImageView()
         init(name: Bool) {
             super.init(frame: .zero)
             let text = NSTextField(labelWithString: "")
@@ -215,9 +250,20 @@ struct NativeFileRow: Equatable {
             let stack = NSStackView(); stack.orientation = .horizontal; stack.spacing = 6
             if name {
                 let icon = NSImageView(); icon.imageScaling = .scaleProportionallyDown
+                let container = NSView(); container.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([container.widthAnchor.constraint(equalToConstant: 18), container.heightAnchor.constraint(equalToConstant: 18)])
                 icon.translatesAutoresizingMaskIntoConstraints = false
-                NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 16), icon.heightAnchor.constraint(equalToConstant: 16)])
-                imageView = icon; stack.addArrangedSubview(icon)
+                linkBadge.image = NSImage(systemSymbolName: "link", accessibilityDescription: nil)
+                linkBadge.symbolConfiguration = .init(pointSize: 8, weight: .semibold)
+                linkBadge.translatesAutoresizingMaskIntoConstraints = false; linkBadge.isHidden = true
+                container.addSubview(icon); container.addSubview(linkBadge)
+                NSLayoutConstraint.activate([
+                    icon.widthAnchor.constraint(equalToConstant: 16), icon.heightAnchor.constraint(equalToConstant: 16),
+                    icon.centerXAnchor.constraint(equalTo: container.centerXAnchor), icon.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                    linkBadge.widthAnchor.constraint(equalToConstant: 9), linkBadge.heightAnchor.constraint(equalToConstant: 9),
+                    linkBadge.trailingAnchor.constraint(equalTo: container.trailingAnchor), linkBadge.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+                ])
+                imageView = icon; stack.addArrangedSubview(container)
             }
             stack.addArrangedSubview(text); stack.translatesAutoresizingMaskIntoConstraints = false
             addSubview(stack)

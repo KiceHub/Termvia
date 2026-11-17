@@ -24,21 +24,22 @@ struct HostTrustView: View {
             HStack {
                 Button(T("忘记指纹…"), role: .destructive) { confirm = true }.disabled(busy || fingerprints.isEmpty)
                 Spacer()
-                Button(T("完成")) { dismiss() }.keyboardShortcut(.defaultAction)
+                Button(T("完成")) { dismiss() }.keyboardShortcut(.defaultAction).confirmationButton()
             }
         }.padding(24).frame(width: 520, height: model.hostTrustWarning == nil ? 320 : 440).workspaceEnvironment(model: model)
             .task { await load() }
-            .alert(T("忘记此地址的主机指纹？"), isPresented: $confirm) {
-                Button(T("忘记指纹"), role: .destructive) {
+            .compactAlert(T("忘记此地址的主机指纹？"), isPresented: $confirm,
+                          message: "\(host.address):\(host.port)\n\n" + T("下次连接可能需重新确认指纹。"), actions: [
+                .init(T("忘记指纹")) {
                     Task {
                         busy = true
                         do { try await store.forget(host); fingerprints = ""; error = nil }
                         catch { self.error = error.localizedDescription }
                         busy = false
                     }
-                }
-                Button(T("取消"), role: .cancel) {}
-            } message: { Text(T("下次连接必须重新核对并确认指纹。已打开的会话不会中断；同一地址的配置共用此信任记录。")) }
+                },
+                .init(T("取消"), role: .cancel)
+            ])
     }
     private func load() async {
         busy = true; defer { busy = false }

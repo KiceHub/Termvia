@@ -47,7 +47,6 @@
 "删除" = "Delete";
 "删除…" = "Delete…";
 "删除此主机配置？" = "Delete This Host?";
-"删除配置后，已打开的终端和传输继续运行；已保存的主机指纹保留。" = "Open terminals and transfers will continue. Saved host fingerprints will be kept.";
 "刷新目录" = "Refresh Directory";
 "剪切" = "Cut";
 "协议" = "Protocol";
@@ -229,7 +228,6 @@
 "SFTP 返回了无效数据" = "The SFTP server returned invalid data.";
 "SFTP 连接已关闭：%@" = "SFTP connection closed: %@";
 "SFTP 错误 %d：%@" = "SFTP error %d: %@";
-"下次连接必须重新核对并确认指纹。已打开的会话不会中断；同一地址的配置共用此信任记录。" = "Verify and confirm the fingerprint on the next connection. Open sessions will continue. Profiles for the same address share this trust record.";
 "主机指纹" = "Host Fingerprints";
 "主机指纹…" = "Host Fingerprints…";
 "仅删除空文件夹，不递归删除；远程删除无法撤销。" = "Only empty folders are removed. Remote deletion cannot be undone.";
@@ -390,8 +388,6 @@
 
 "文件夹已存在：%@" = "Folder already exists: %@";
 "合并" = "Merge";
-"合并会保留目标独有内容；同名文件仍逐项询问是否覆盖。" = "Merging keeps destination-only items. Files with the same name will each ask before replacement.";
-"是否覆盖目标中的同名文件？" = "Replace the file with the same name at the destination?";
 "目标类型不同或为符号链接：%@" = "The destination has a different type or is a symbolic link: %@";
 "已跳过" = "Skipped";
 "已跳过 %d 项" = "Skipped %d items";
@@ -408,8 +404,6 @@
 "目标" = "To";
 
 "无效的删除路径" = "Invalid deletion path";
-
-"将关闭所有标签页并取消未完成的传输。" = "All tabs will close and unfinished transfers will be cancelled.";
 
 "主机名称已存在" = "A host with this name already exists";
 
@@ -569,8 +563,6 @@
 
 "鼠标操作" = "Mouse";
 
-
-
 "无法读取 PPK 私钥" = "Unable to read the PPK private key";
 
 "PPK 私钥文件过大" = "The PPK private key is too large";
@@ -592,7 +584,6 @@
 "继续" = "Continue";
 
 "右键拷贝/粘贴" = "Right-click to copy/paste";
-
 
 "已断开" = "Disconnected";
 
@@ -685,8 +676,133 @@
 "隐藏的主机地址" = "Hidden host address";
 "包括已删除主机的信任记录；删除主机配置不会清除此列表。" = "Includes trust records for deleted hosts. Deleting a host configuration keeps these records.";
 "忘记此指纹？" = "Forget this fingerprint?";
-"仅移除此条信任记录。下次连接可能需要重新确认指纹；已打开的会话不会中断。" = "Only this trust record will be removed. The next connection may require fingerprint confirmation. Open sessions will continue.";
 
 "SSH 保活" = "SSH Keep Alive";
 "保活间隔" = "Keep-alive interval";
 "应用于新建或重新建立的 SSH 连接；连续 3 次未响应则断开。" = "Applies to new or re-established SSH connections; disconnects after 3 unanswered probes.";
+
+// Version 0.2.0
+"文件编辑器" = "File Editor";
+"使用内置编辑器" = "Use built-in editor";
+"系统默认应用" = "System default app";
+"选择应用…" = "Choose App…";
+"重置" = "Reset";
+"跳板机连接已结束" = "Jump host connection ended";
+"代理服务器" = "Proxy Servers";
+"请先解除主机对该代理的引用" = "Remove host references to this proxy first";
+"添加代理…" = "Add Proxy…";
+"类型" = "Type";
+"无法打开文件" = "Unable to open file";
+"保存并同步" = "Save and Sync";
+"关闭文件" = "Close File";
+"内置编辑器仅支持 UTF-8 文本，请使用外置应用" = "The built-in editor supports UTF-8 text. Use an external app for this file.";
+"拷贝文件路径" = "Copy File Path";
+"%@：%@" = "%@: %@";
+"选择主机…" = "Choose Host…";
+"关闭当前终端" = "Close Current Terminal";
+"直连" = "Direct";
+"跳板机" = "Jump Host";
+"上游连接" = "Upstream";
+"左右拆分" = "Split Left and Right";
+"上下拆分" = "Split Above and Below";
+"文件操作" = "File Operation";
+"移动/重命名" = "Move / Rename";
+"请检查代理名称、地址、端口和用户名" = "Check the proxy name, address, port and username";
+"跳板机链存在循环" = "The jump host chain contains a cycle";
+"找不到上游跳板机" = "Upstream jump host not found";
+"找不到代理服务器" = "Proxy server not found";
+"无法保存代理配置" = "Unable to save proxy configuration";
+"代理辅助程序缺失，请重新构建应用" = "Proxy helper is missing. Rebuild the app.";
+"跳板机连接超时" = "Jump host connection timed out";
+"请先解除主机对该跳板机的引用" = "Remove host references to this jump host first";
+"代理密码过长" = "Proxy password is too long";
+"代理名称已存在" = "A proxy with this name already exists";
+"移动" = "Move";
+
+// Version 0.2.1
+"代理" = "Proxies";
+"搜索代理" = "Search proxies";
+"备注" = "Note";
+"无" = "None";
+"对端 IP" = "Endpoint IP";
+"Peer 公钥" = "Peer Public Key";
+"本机公钥" = "Local Public Key";
+"本机 IP" = "Local IP";
+"预共享密钥" = "Preshared Key";
+"生成" = "Generate";
+"请选择代理服务器" = "Choose a proxy server";
+"请检查 WireGuard 公钥、本机 IP 和 MTU" = "Check the WireGuard public key, local IP and MTU";
+"WireGuard 密钥必须为 Base64 编码的 32 字节密钥" = "WireGuard keys must be Base64-encoded 32-byte keys";
+"WireGuard 连接已结束" = "WireGuard connection ended";
+"WireGuard 启动超时" = "WireGuard startup timed out";
+"远程文件显示在左侧" = "Show remote files on the left";
+"主界面" = "Main Window";
+"窗口拆分" = "Split Window";
+"本主机" = "Current Host";
+"上下" = "Above and Below";
+"左右" = "Left and Right";
+"关闭其他文件" = "Close Other Files";
+"关闭全部文件" = "Close All Files";
+"缩小文本" = "Decrease Text Size";
+"放大文本" = "Increase Text Size";
+"行/列" = "Line/Column";
+"编码" = "Encoding";
+"换行符" = "Line Ending";
+"语法高亮" = "Syntax";
+"自动识别" = "Automatic";
+"纯文本" = "Plain Text";
+"自定义…" = "Custom…";
+"自定义高亮规则" = "Custom Highlight Pattern";
+"当前编码无法无损保存此文本" = "This text cannot be saved losslessly with the selected encoding";
+"无法使用所选编码打开文件" = "Unable to decode the file with the selected encoding";
+"暂停" = "Pause";
+
+"%@ 副本" = "%@ Copy";
+
+"查看私钥" = "Show Private Key";
+
+"隐藏私钥" = "Hide Private Key";
+
+"继续打开" = "Continue Opening";
+
+"无法检查文件格式" = "Cannot inspect the file format";
+
+"未知" = "Unknown";
+
+"刷新将重新读取文件内容，未同步的更改将丢失。" = "Refreshing rereads the file and discards unsynchronized changes.";
+
+"是否放弃更改并刷新文件？" = "Discard changes and refresh the file?";
+
+"放弃更改并刷新" = "Discard and Refresh";
+
+"刷新前是否保存文件？" = "Save the file before refreshing?";
+
+
+
+"关闭前是否保存文件？" = "Save the file before closing?";
+
+"不保存" = "Don’t Save";
+
+"全部关闭" = "Close All";
+
+"是否全部关闭？" = "Close all?";
+
+"打开大文件？" = "Open large file?";
+
+"无法编辑此文件" = "Can’t edit this file";
+
+"文件大小：%@" = "File size: %@";
+
+"仅支持文本文件" = "Only text files are supported.";
+
+"非文本文件" = "Not a text file.";
+
+"仅支持 16 MB 以内的文件" = "Files must be 16 MB or smaller.";
+
+"同名文件另行确认覆盖。" = "Confirm overwrites separately.";
+
+"下次连接可能需重新确认指纹。" = "You may need to confirm the fingerprint next time.";
+
+"未保存更改将丢失，传输将取消。" = "Unsaved changes will be lost. Transfers will be canceled.";
+
+"另有 %d 项" = "Plus %d more";

@@ -22,6 +22,31 @@ extension TerminalCursorShape {
     private var draggedSelection = false
     private var consumedRightClick = false
     private var reconnectKeyMonitor: Any?
+    override var hasFocus: Bool {
+        get { super.hasFocus }
+        set { super.hasFocus = newValue; if newValue { onFocus?() } }
+    }
+    var onFocus: (() -> Void)?
+    var splitMenu: (() -> NSMenu)?
+    var paneDrop: ((UUID) -> Void)?
+    var paneDragHover: ((Bool) -> Void)?
+    var acceptsRemotePaths: (() -> Bool)?
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if sender.draggingPasteboard.string(forType: PaneLabel.type) != nil { paneDragHover?(true); return .move }
+        return acceptsRemotePaths?() == true && sender.draggingPasteboard.data(forType: .init(FileDragPayload.type)) != nil ? .copy : []
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !draggingEntered(sender).isEmpty }
+    override func draggingExited(_ sender: NSDraggingInfo?) { paneDragHover?(false) }
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { paneDragHover?(false) }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        paneDragHover?(false)
+        if let value = sender.draggingPasteboard.string(forType: PaneLabel.type), let id = UUID(uuidString: value), let paneDrop { paneDrop(id); return true }
+        guard acceptsRemotePaths?() == true, let data = sender.draggingPasteboard.data(forType: .init(FileDragPayload.type)),
+              data.count <= 1048576, let payload = try? JSONDecoder().decode(FileDragPayload.self, from: data), payload.version == 1, payload.localPaths.isEmpty, !payload.entries.isEmpty, payload.entries.count <= 1000,
+              let text = try? SSHRoute.terminalPaths(payload.entries.map(\.path)) else { return false }
+        window?.makeFirstResponder(self); pasteText(text); return true
+    }
     var reconnectOnReturn: (() -> Bool)?
     func handleDisconnectedReturn(_ event: NSEvent) -> Bool {
         if [36, 76].contains(event.keyCode), !event.isARepeat,
@@ -44,6 +69,7 @@ extension TerminalCursorShape {
     var clipboardWriter: (String) -> Void = { text in NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
     var clipboardPaster: ((ThemedTerminalView) -> Void) = { $0.paste($0) }
     override func mouseDown(with event: NSEvent) {
+        onFocus?()
         leftClickSelection = preferences.leftMouseAction == .copy && event.clickCount == 1 && event.modifierFlags.intersection([.control, .option, .command, .shift]).isEmpty ? getSelection() : nil
         draggedSelection = false
         super.mouseDown(with: event)
@@ -55,6 +81,8 @@ extension TerminalCursorShape {
         leftClickSelection = nil
     }
     override func rightMouseDown(with event: NSEvent) {
+        onFocus?()
+        if event.modifierFlags.contains(.shift), let menu = splitMenu?() { consumedRightClick = true; NSMenu.popUpContextMenu(menu, with: event, for: self); return }
         guard preferences.rightMouseAction != .disabled, !event.modifierFlags.contains(.shift) else { consumedRightClick = false; super.rightMouseDown(with: event); return }
         consumedRightClick = true
         if let text = getSelection(), !text.isEmpty {
@@ -106,8 +134,10 @@ extension TerminalCursorShape {
         super.viewDidMoveToWindow()
         if let reconnectKeyMonitor { NSEvent.removeMonitor(reconnectKeyMonitor) }; reconnectKeyMonitor = nil
         if window != nil {
+            registerForDraggedTypes([.init(FileDragPayload.type)])
             reconnectKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self, event.window === self.window, self.window?.firstResponder === self else { return event }
+                self.onFocus?()
                 return self.handleDisconnectedReturn(event) ? nil : event
             }
         }

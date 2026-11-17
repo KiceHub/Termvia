@@ -8,7 +8,7 @@ struct HostListBlankSelection: NSViewRepresentable {
     func makeNSView(context: Context) -> Observer { Observer() }
     func updateNSView(_ view: Observer, context: Context) {
         view.clear = clear
-        DispatchQueue.main.async { view.configureSelection() }
+        view.scheduleConfiguration()
     }
     static func dismantleNSView(_ view: Observer, coordinator: ()) { view.uninstall() }
     final class Observer: NSView {
@@ -17,18 +17,18 @@ struct HostListBlankSelection: NSViewRepresentable {
         private var selectionObserver: NSObjectProtocol?
         private weak var hostTable: NSTableView?
         private weak var selectedRow: NSTableRowView?
-        private var tableStyleObservation: NSKeyValueObservation?
         private var rowStyleObservation: NSKeyValueObservation?
+        private var configurationPending = false
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             uninstall()
             guard window != nil else { return }
-            DispatchQueue.main.async { [weak self] in self?.configureSelection() }
+            scheduleConfiguration()
             selectionObserver = NotificationCenter.default.addObserver(forName: NSTableView.selectionDidChangeNotification, object: nil, queue: .main) { [weak self] note in
                 MainActor.assumeIsolated {
                     guard let self, let table = note.object as? NSTableView, table === self.hostTable else { return }
-                    self.configureSelection()
+                    self.scheduleConfiguration()
                 }
             }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
@@ -38,28 +38,39 @@ struct HostListBlankSelection: NSViewRepresentable {
         func uninstall() {
             if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil
             if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }; selectionObserver = nil
-            tableStyleObservation = nil; rowStyleObservation = nil
+            rowStyleObservation = nil
             hostTable = nil; selectedRow = nil
         }
         private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func scheduleConfiguration() {
+            guard !configurationPending else { return }
+            configurationPending = true
+            RunLoop.main.perform(inModes: [.default]) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.configurationPending = false; self.configureSelection()
+                }
+            }
+        }
         func configureSelection() {
             guard let root = window?.contentView else { return }
             for table in descendants(root).compactMap({ $0 as? NSTableView }) where !(table is SidebarInsertionFeedback) && table.tableColumns.count == 1 && table.convert(table.bounds, to: self).intersects(bounds) {
-                if hostTable !== table {
-                    hostTable = table
-                    tableStyleObservation = table.observe(\.selectionHighlightStyle, options: [.new]) { [weak self] table, _ in
-                        MainActor.assumeIsolated { if table.selectionHighlightStyle != .none { self?.configureSelection() } }
-                    }
-                }
-                table.selectionHighlightStyle = .none
+                hostTable = table
+                // SwiftUI owns the table's style. Changing it can synchronously
+                // publish SwiftUI's internal selection during its own update.
+                // Row styles are sufficient to preserve the outline selection.
                 // SwiftUI can reuse row views that still carry their previous
                 // native highlight style. Clear those alongside the table.
-                table.enumerateAvailableRowViews { row, _ in row.selectionHighlightStyle = .none }
+                // Enumeration can ask SwiftUI to update/reuse a hosted row.
+                // Mutate its AppKit style only after that update has returned.
+                var available: [NSTableRowView] = []
+                table.enumerateAvailableRowViews { row, _ in available.append(row) }
+                for row in available where row.selectionHighlightStyle != .none { row.selectionHighlightStyle = .none }
                 let row = table.selectedRow >= 0 ? table.rowView(atRow: table.selectedRow, makeIfNecessary: false) : nil
                 if selectedRow !== row {
                     selectedRow = row
-                    rowStyleObservation = row?.observe(\.selectionHighlightStyle, options: [.new]) { row, _ in
-                        MainActor.assumeIsolated { if row.selectionHighlightStyle != .none { row.selectionHighlightStyle = .none } }
+                    rowStyleObservation = row?.observe(\.selectionHighlightStyle, options: [.new]) { [weak self] row, _ in
+                        MainActor.assumeIsolated { if row.selectionHighlightStyle != .none { self?.scheduleConfiguration() } }
                     }
                 }
             }
@@ -68,7 +79,7 @@ struct HostListBlankSelection: NSViewRepresentable {
             guard let window, event.window === window, window.attachedSheet == nil,
                   bounds.contains(convert(event.locationInWindow, from: nil)), let root = window.contentView else { return }
             configureSelection()
-            DispatchQueue.main.async { [weak self] in self?.configureSelection() }
+            scheduleConfiguration()
             for table in descendants(root).compactMap({ $0 as? NSTableView }) where !(table is SidebarInsertionFeedback) {
                 guard let clip = table.enclosingScrollView?.contentView,
                       clip.bounds.contains(clip.convert(event.locationInWindow, from: nil)) else { continue }

@@ -32,7 +32,6 @@ import TermviaCore
         guard showing else { hide(); return }
         guard !panel.isVisible else { return }
         guard let parent = NSApp.keyWindow?.sheetParent ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
-        panel.appearance = parent.effectiveAppearance
         panel.animationBehavior = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .none : .utilityWindow
         let available = parent.screen?.visibleFrame ?? parent.frame
         let size = panel.frame.size

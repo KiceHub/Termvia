@@ -20,6 +20,14 @@ public enum LocalFileOperations {
 }
 
 extension FilePaths {
+    /// Resolve links only for explicit opening; mutation paths retain the link.
+    public static func openingTarget(_ url: URL) throws -> URL {
+        guard url.isFileURL, !url.path.contains("\0") else { throw SSHError.invalid("本地和远程路径必须是绝对路径") }
+        let target = url.standardizedFileURL.resolvingSymlinksInPath()
+        let metadata = try target.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey])
+        guard metadata.isSymbolicLink != true, metadata.isRegularFile == true || metadata.isDirectory == true else { throw SSHError.invalid("无法打开文件") }
+        return target
+    }
     private static func normalizeRemotePath(_ path: String) -> String {
         var components: [Substring] = []
         for component in path.split(separator: "/") {

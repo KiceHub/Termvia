@@ -10,14 +10,15 @@ let diagnostics = ProcessInfo.processInfo.environment["TERMVIA_DIAGNOSTICS"] == 
     && exists("Sources/Termvia/Diagnostics")
 let hasProbe = exists("Sources/TermviaProbe")
 var products: [Product] = [.executable(name: "Termvia", targets: ["Termvia"]),
-                           .executable(name: "termvia-askpass", targets: ["TermviaAskpass"])]
+                           .executable(name: "termvia-askpass", targets: ["TermviaAskpass"]), .executable(name: "termvia-proxy", targets: ["TermviaProxy"])]
 var targets: [Target] = [
     .target(name: "TermviaCore", resources: [.process("Resources")]),
     .executableTarget(name: "Termvia", dependencies: ["TermviaCore", .product(name: "SwiftTerm", package: "SwiftTerm")],
                       exclude: diagnostics ? [] : ["Diagnostics"].filter { exists("Sources/Termvia/" + $0) },
                       resources: [.copy("Resources/HostIcons")],
                       swiftSettings: diagnostics ? [.define("TERMVIA_DIAGNOSTICS")] : []),
-    .executableTarget(name: "TermviaAskpass", dependencies: ["TermviaCore"])
+    .executableTarget(name: "TermviaAskpass", dependencies: ["TermviaCore"]),
+    .executableTarget(name: "TermviaProxy", dependencies: ["TermviaCore"])
 ]
 if hasProbe {
     products.append(.executable(name: "termvia-probe", targets: ["TermviaProbe"]))

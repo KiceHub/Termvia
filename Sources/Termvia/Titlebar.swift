@@ -14,7 +14,7 @@ import Combine
     private weak var window: NSWindow?
     let toolbar = NSToolbar(identifier: "Termvia.Titlebar")
     private var layoutObservers = Set<AnyCancellable>()
-    private var appearanceObserver: NSKeyValueObservation?
+    private var appearanceRefresh: ToolbarAppearanceRefresh?
     private var tabContextMonitor: Any?
     private var shortcutRouter: WorkspaceShortcutRouter?
     init(model: AppModel, window: NSWindow) {
@@ -33,21 +33,14 @@ import Combine
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
+        window.isExcludedFromWindowsMenu = true
         window.titleVisibility = .hidden
         window.toolbarStyle = .unifiedCompact
         window.toolbar = toolbar
-        applyAppearance()
-        appearanceObserver = window.observe(\.effectiveAppearance) { [weak self] _, _ in
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let window = self.window else { return }
-                self.model.updateResolvedAppearance(window.effectiveAppearance)
-            }
-        }
+        WorkspaceChrome.apply(to: window)
+        appearanceRefresh = ToolbarAppearanceRefresh(toolbar: toolbar, preserving: [Self.sessionsID])
         model.$layout.map(\.language).removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async { [weak self] in self?.localizeItems() }
-        }.store(in: &layoutObservers)
-        model.$layout.map(\.appearance).removeDuplicates().sink { [weak self] _ in
-            DispatchQueue.main.async { [weak self] in self?.applyAppearance() }
         }.store(in: &layoutObservers)
     }
     deinit { if let tabContextMonitor { NSEvent.removeMonitor(tabContextMonitor) } }
@@ -67,12 +60,6 @@ import Combine
         }
         return false
     }
-    private func applyAppearance() {
-        let appearance = AppAppearance.override(for: model.layout.appearance)
-        guard let window else { return }
-        if window.appearance?.name != appearance?.name { window.appearance = appearance }
-        model.updateResolvedAppearance(window.effectiveAppearance)
-    }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.sessionsID] + Self.controlIDs }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
@@ -84,7 +71,7 @@ import Combine
             view.setContentHuggingPriority(.init(1), for: .horizontal)
             view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             view.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([view.widthAnchor.constraint(greaterThanOrEqualToConstant: 160), view.heightAnchor.constraint(equalToConstant: 32)])
+            NSLayoutConstraint.activate([view.widthAnchor.constraint(greaterThanOrEqualToConstant: 160), view.heightAnchor.constraint(equalToConstant: 34)])
             item.view = view; item.label = T("会话"); item.visibilityPriority = .high
             // Each selected tab has its own system glass; avoid nesting it in a glass strip.
             item.isBordered = false
@@ -190,26 +177,16 @@ struct TitlebarSessions: View {
     @ObservedObject var model: AppModel
     var body: some View {
         let _ = uiLocale.identifier
-        GeometryReader { geometry in
-            ScrollViewReader { reader in
-                ScrollView(.horizontal) {
-                    HStack(spacing: 2) {
-                        ForEach(model.sessions) { session in
-                            SessionTab(session: session, selected: model.selected == session.id,
-                                       select: { model.selected = session.id; model.focusTerminal() },
-                                       close: { model.close(session) },
-                                       reconnect: { model.reconnect(session) },
-                                       rename: { model.presentTabRename(session) },
-                                       hostIcon: model.tabIcon(for: session),
-                                       doubleClickCloses: model.settings.doubleClickClosesTab).id(session.id)
-                        }
-                        NewSessionButton { model.newStartPage() }
-                        WindowDragSpace().frame(minWidth: 20, maxWidth: .infinity, maxHeight: .infinity)
-                    }.frame(minWidth: geometry.size.width, alignment: .leading)
-                }.scrollIndicators(.hidden)
-                    .onChange(of: model.selected) { _, id in if let id { reader.scrollTo(id) } }
-            }
-        }.frame(height: 32).environment(\.locale, model.locale)
+        CompactTabStrip(items: model.sessions, id: \.id, selected: model.selected, move: model.reorderTabs) { session in
+            SessionTab(session: session, selected: model.selected == session.id,
+                       select: { model.selected = session.id; model.focusTerminal() }, close: { model.close(session) },
+                       reconnect: { model.reconnect(model.tabTerminal(session)) }, rename: { model.presentTabRename(session) },
+                       splitActions: model.splitActions(for: session), hostIcon: model.tabIcon(for: model.tabTerminal(session)),
+                       doubleClickCloses: model.settings.doubleClickClosesTab, statusSession: model.tabTerminal(session))
+        } trailing: {
+            NewSessionButton { model.newStartPage() }
+            WindowDragSpace().frame(minWidth: 20, maxWidth: .infinity, maxHeight: .infinity)
+        }.environment(\.locale, model.locale)
 #if TERMVIA_DIAGNOSTICS
         .background(AppearanceCheckProbe(role: "tabs"))
 #endif
@@ -227,7 +204,7 @@ private struct NewSessionButton: View {
     }
 }
 
-private struct WindowDragSpace: NSViewRepresentable {
+struct WindowDragSpace: NSViewRepresentable {
     final class DragView: NSView {
         override var mouseDownCanMoveWindow: Bool { true }
         override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }

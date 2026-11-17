@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Let AppKit own the sidebar material, edge treatment and collapse behavior.
+/// Native sidebar layout/collapse over the window's single material surface.
 struct NativeSidebarSplit<Sidebar: View, Content: View>: NSViewControllerRepresentable {
     @Binding var fraction: Double
     @Binding var visible: Bool
@@ -9,15 +9,28 @@ struct NativeSidebarSplit<Sidebar: View, Content: View>: NSViewControllerReprese
     @ViewBuilder var second: () -> Content
 
     func makeNSViewController(context: Context) -> NativeSidebarController {
-        NativeSidebarController(sidebar: AnyView(sidebar().environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme)),
-                                content: AnyView(second().environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme)))
+        let controller = NativeSidebarController(sidebar: AnyView(sidebar().environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme)),
+                                content: AnyView(second().background(AppTheme.surface).environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme)))
+        applyContentAppearance(controller, scheme: context.environment.colorScheme)
+        return controller
     }
     func updateNSViewController(_ controller: NativeSidebarController, context: Context) {
         controller.sidebarHost.rootView = AnyView(sidebar().environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme))
-        controller.contentHost.rootView = AnyView(second().environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme))
+        controller.contentHost.rootView = AnyView(second().background(AppTheme.surface).environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme))
+        // Keep terminal/file controls in the window's normal appearance;
+        // only the exposed window chrome participates in sidebar vibrancy.
+        applyContentAppearance(controller, scheme: context.environment.colorScheme)
         controller.configure(fraction: fraction, visible: visible) { newFraction, newVisible in
             if abs(fraction - newFraction) > 0.002 { fraction = newFraction }
             if visible != newVisible { visible = newVisible }
+        }
+    }
+    private func applyContentAppearance(_ controller: NativeSidebarController, scheme: ColorScheme) {
+        // Derive from the same resolved scheme as the hosting graph, never a
+        // window snapshot taken before AppKit finishes propagating a change.
+        let name: NSAppearance.Name = scheme == .dark ? .darkAqua : .aqua
+        if controller.contentHost.view.appearance?.name != name {
+            controller.contentHost.view.appearance = NSAppearance(named: name)
         }
     }
 }
@@ -43,12 +56,15 @@ struct NativeSidebarSplit<Sidebar: View, Content: View>: NSViewControllerReprese
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func viewDidLoad() {
         super.viewDidLoad()
-        sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHost)
+        // The window-level sidebar surface already owns the material.
+        // This inner split item supplies layout/collapse without another layer.
+        sidebarItem = NSSplitViewItem(viewController: sidebarHost)
+        sidebarItem.canCollapse = true
+        sidebarItem.isSpringLoaded = true
+        sidebarItem.preferredThicknessFraction = 0.15
         sidebarItem.minimumThickness = 190
         sidebarItem.maximumThickness = 480
         sidebarItem.canCollapseFromWindowResize = false
-        // Keep the single session strip across the entire titlebar.
-        sidebarItem.allowsFullHeightLayout = false
         sidebarItem.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
         let content = NSSplitViewItem(viewController: contentHost)
         content.minimumThickness = 720

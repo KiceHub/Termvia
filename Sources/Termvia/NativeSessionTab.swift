@@ -8,9 +8,11 @@ struct NativeSessionTab: NSViewRepresentable {
         let title: String
         let enabled: Bool
         let perform: (() -> Void)?
+        var children: [Action] = []
         init(_ title: String, enabled: Bool = true, action: @escaping () -> Void) {
             self.title = title; self.enabled = enabled; self.perform = action
         }
+        init(_ title: String, children: [Action]) { self.title = title; enabled = true; perform = nil; self.children = children }
         private init() { title = ""; enabled = false; perform = nil }
         static var separator: Self { Self() }
     }
@@ -35,13 +37,17 @@ struct NativeSessionTab: NSViewRepresentable {
         func handleDoubleClick(_ event: NSEvent) -> Bool {
             let point = convert(event.locationInWindow, from: nil)
             guard event.type == .leftMouseDown, event.clickCount == 2, event.modifierFlags.intersection([.control, .option, .command]).isEmpty,
-                  bounds.contains(point), point.x < bounds.maxX - 30, let onDoubleClick else { return false }
+                  bounds.contains(point), point.x >= 25, let onDoubleClick else { return false }
             onDoubleClick(); return true
         }
         override var mouseDownCanMoveWindow: Bool { false }
         override func menu(for event: NSEvent) -> NSMenu? {
+            makeMenu(actions)
+        }
+        private func makeMenu(_ actions: [Action]) -> NSMenu {
             let menu = NSMenu(); menu.autoenablesItems = false
             for action in actions {
+                if !action.children.isEmpty { let item = NSMenuItem(title: action.title, action: nil, keyEquivalent: ""); item.submenu = makeMenu(action.children); menu.addItem(item); continue }
                 guard action.perform != nil else { menu.addItem(.separator()); continue }
                 let item = NSMenuItem(title: action.title, action: #selector(invoke(_:)), keyEquivalent: "")
                 item.target = self; item.representedObject = action; item.isEnabled = action.enabled

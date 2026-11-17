@@ -21,6 +21,15 @@ struct Transfer: Identifiable {
         if upload { return "remote:" + host.user + "@" + host.address.lowercased() + ":" + String(host.port) + ":" + Data(remote.utf8).base64EncodedString() }
         return "local:" + URL(fileURLWithPath: local).standardizedFileURL.path.precomposedStringWithCanonicalMapping.lowercased()
     }
+    var control = FileTransferControl()
+    var pauseSupported = true
+    var startedAt: Date? = nil
+    var totalBytes: UInt64 = 0
+    var completedBytes: UInt64 = 0
+    var bytesPerSecond = 0.0
+    var editorOwned = false
+    var operationTitle: String? = nil
+    var completion: ((Bool) -> Void)? = nil
     var state = "排队中"
     var detail = ""
     func conflicts(with other: Self) -> Bool {
@@ -37,7 +46,7 @@ struct Transfer: Identifiable {
 
 
 enum WorkspaceFocusTarget { case terminal, hostSearch }
-enum SettingsPage: String, CaseIterable { case general, terminal, connection, shortcuts, credentials, about }
+enum SettingsPage: String, CaseIterable { case general, terminal, connection, proxies, shortcuts, credentials, about }
 
 @MainActor final class AppModel: ObservableObject {
     @Published private(set) var organization = HostOrganization()
@@ -47,6 +56,8 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     @Published private(set) var hosts: [SSHHost] = []
     @Published private(set) var credentials: [LoginCredential] = []
     let authenticationPrompts = AuthenticationPrompts()
+    let wireGuardPool = WireGuardPool()
+    let fileEditor = FileEditorController()
     let fileConflicts = FileConflictPrompts()
     let quitShortcut = HoldToQuit()
     private var transientSecrets: [UUID: String] = [:]
@@ -54,6 +65,11 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     private let hostSecrets: any CredentialSecretStore
     private var credentialReadFailure: String?
     @Published var sessions: [Session] = [] { didSet { reconcileMonitoring() } }
+    var splitAuxiliaryOwners: [UUID: [UUID: UUID]] = [:]
+    @Published var splitTrees: [UUID: TerminalSplitTree] = [:]
+    @Published var splitSessions: [UUID: Session] = [:]
+    @Published var splitFocus: [UUID: UUID] = [:]
+    @Published var splitRequest: SplitRequest?
     @Published var selected: UUID? {
         didSet {
             guard oldValue != selected else { return }
@@ -80,7 +96,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     @Published var settings: AppSettings {
         didSet {
             let value = settings.validated()
-            for session in sessions where !session.isStartPage { session.terminal.configure(value) }
+            for session in allSessions where !session.isStartPage { session.terminal.configure(value) }
             if oldValue.autoReconnect && !settings.autoReconnect { cancelAutomaticReconnects() }
             settingsSaveTask?.cancel()
             settingsSaveTask = Task { [weak self] in
@@ -96,9 +112,12 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
             Localization.preference = layout.language
             if oldValue.appearance != layout.appearance { synchronizeApplicationAppearance() }
             if !restoringWorkspace {
-                if oldValue.monitorVisible != layout.monitorVisible { active?.sidebarVisible = layout.monitorVisible }
+                if oldValue.monitorVisible != layout.monitorVisible {
+                    if let tree = activeSplitTree { for id in tree.leaves { session(id)?.sidebarVisible = layout.monitorVisible } }
+                    else { active?.sidebarVisible = layout.monitorVisible }
+                }
                 if oldValue.panelVisible != layout.panelVisible {
-                    for session in sessions where Self.workspaceKey(for: session) == workspaceKey {
+                    for session in allSessions where Self.workspaceKey(for: session) == workspaceKey || activeSplitTree?.leaves.contains(session.id) == true {
                         setFileBrowserVisible(layout.panelVisible, for: session)
                     }
                 }
@@ -106,7 +125,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
             }
             layoutSaveTask?.cancel()
             if oldValue.fontSize != layout.fontSize {
-                for session in sessions where !session.isStartPage { session.terminal.font = .monospacedSystemFont(ofSize: layout.fontSize, weight: .regular) }
+                for session in allSessions where !session.isStartPage { session.terminal.font = .monospacedSystemFont(ofSize: layout.fontSize, weight: .regular) }
             }
             layoutSaveTask = Task { [weak self] in
                 do { try await Task.sleep(for: .milliseconds(250)); self?.saveLayout() } catch {}
@@ -114,14 +133,21 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         }
     }
     @Published var transfers: [Transfer] = []
-    var events: [String] { active?.activity.lines ?? [] }
-    var activeTransfers: [Transfer] { guard let activity = active?.activity else { return [] }; return transfers.filter { $0.activity === activity } }
+    var events: [String] { focusedTerminal?.activity.lines ?? [] }
+    var activeTransfers: [Transfer] {
+        guard let activity = active?.activity else { return [] }
+        let owners = activeSplitTree?.leaves.compactMap { session($0)?.activity } ?? []
+        return transfers.filter { item in
+            item.activity === activity || ((item.editorOwned || owners.contains { $0 === item.activity }) && active?.host != nil && item.host.id == active?.host?.id)
+        }
+    }
     @Published var error: String?
-    var transferConfirmation: NSAlert?
+    var transferConfirmation: CompactAlert?
     @Published var tabRenameTarget: Session?
     @Published var tabNameDraft = ""
     @Published var hostManagerPresented = false
     @Published var hostToEdit: SSHHost?
+    @Published var hostCopyDraft: HostCopyDraft?
     @Published var hostTrustWarning: String?
     @Published var hostTrustToInspect: SSHHost?
     @Published var selectedHostID: UUID?
@@ -130,6 +156,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     let root: URL
     var commands: SSHCommands { SSHCommands(knownHosts: root.appendingPathComponent("known_hosts").path, useAskpass: true, suppressWarnings: settings.suppressOpenSSHWarnings, keepAliveInterval: settings.sshKeepAlive ? settings.validated().sshKeepAliveInterval : 0) }
     private var jobs: [UUID: Task<Void, Never>] = [:]
+    private var fileOperationTokens: [UUID: UUID] = [:]
     private var fileJobs: [UUID: Task<Void, Never>] = [:]
     @Published private var filePlans = Set<UUID>()
     private var retiringSessions: [UUID: Session] = [:]
@@ -145,7 +172,9 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     private var shuttingDown = false
     private var hostReadFailure: String?
     private let hostStore: ConnectionStore
-    init(root: URL, secretStore: (any CredentialSecretStore)? = nil, hostSecretStore: (any CredentialSecretStore)? = nil) {
+    private let authenticationHelper: URL?
+    init(root: URL, secretStore: (any CredentialSecretStore)? = nil, hostSecretStore: (any CredentialSecretStore)? = nil, authenticationHelper: URL? = nil) {
+        self.authenticationHelper = authenticationHelper
         hostSecrets = hostSecretStore ?? FileSecretStore(directory: root.appendingPathComponent("host-secrets", isDirectory: true))
         self.root = root
         credentialStore = CredentialStore(url: root.appendingPathComponent("credentials.json"), secrets: secretStore)
@@ -221,7 +250,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
                 if (try? Data(contentsOf: url)) != data { try data.write(to: url, options: .atomic) }
             }
             try write(encoder.encode(layout.validated()), name: "workspace.json")
-            if workspaceReadFailure == nil { try write(encoder.encode(workspaces), name: "host-workspaces.json") }
+            if workspaceReadFailure == nil { var persistent = workspaces; persistent.states = persistent.states.filter { !$0.key.hasPrefix("split:") }; try write(encoder.encode(persistent), name: "host-workspaces.json") }
         }
         catch { self.error = T("无法保存工作区设置：%@", error.localizedDescription) }
     }
@@ -229,6 +258,36 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         guard settingsReadFailure == nil else { return }
         do { try JSONEncoder().encode(settings.validated()).write(to: root.appendingPathComponent("settings.json"), options: .atomic) }
         catch { self.error = T("无法保存设置：%@", error.localizedDescription) }
+    }
+    func saveProxy(_ proxy: SSHProxy, secret: String) throws {
+        try proxy.validate()
+        guard !settings.proxies.contains(where: { $0.id != proxy.id && $0.name.localizedCaseInsensitiveCompare(proxy.name) == .orderedSame }) else { throw SSHError.invalid("代理名称已存在") }
+        var updated = settings
+        if let index = updated.proxies.firstIndex(where: { $0.id == proxy.id }) { updated.proxies[index] = proxy }
+        else { updated.proxies.append(proxy) }
+        try commitProxySettings(updated, id: proxy.id, secret: secret.isEmpty ? nil : secret)
+    }
+    func deleteProxy(_ proxy: SSHProxy) throws {
+        guard !hosts.contains(where: { $0.upstream == .proxy(proxy.id) }) else { throw SSHError.invalid("请先解除主机对该代理的引用") }
+        var updated = settings; updated.proxies.removeAll { $0.id == proxy.id }
+        try commitProxySettings(updated, id: proxy.id, secret: nil)
+    }
+    private func commitProxySettings(_ updated: AppSettings, id: UUID, secret: String?) throws {
+        if let settingsReadFailure { throw SSHError.invalid(T("无法读取设置，已保留原文件：%@", settingsReadFailure)) }
+        let data = try JSONEncoder().encode(updated.validated())
+        let store = FileSecretStore(directory: root.appendingPathComponent("proxy-secrets"))
+        let previous = try store.read(id)
+        do {
+            if let secret { try store.write(secret, id: id) } else { try store.delete(id) }
+            try data.write(to: root.appendingPathComponent("settings.json"), options: .atomic)
+        } catch {
+            let failure = error
+            do { if let previous { try store.write(previous, id: id) } else { try store.delete(id) } }
+            catch { throw SSHError.invalid(failure.localizedDescription + "\n" + error.localizedDescription) }
+            throw failure
+        }
+        // Publish only once both persistence operations succeeded.
+        settings = updated
     }
     func focusTerminal() {
         if active?.isStartPage == true { focusTarget = .hostSearch; hostSearchFocusRevision += 1; return }
@@ -247,6 +306,12 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
             self.layout[keyPath: path] = value
         })
     }
+    func captureCurrentWorkspace() { captureWorkspace() }
+    func seedSplitWorkspace(_ id: UUID) {
+        let key = "split:" + id.uuidString
+        if workspaces.states[key] == nil { workspaces.states[key] = HostWorkspace(layout: layout, localPath: localPath, remotePath: active?.remotePath ?? "~/") }
+    }
+    func activateFocusedWorkspace() { switchWorkspace(to: active) }
     private func captureWorkspace() {
         var state = workspace(for: workspaceKey)
         state.layout = PaneLayout(layout.validated())
@@ -254,7 +319,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     }
     private func switchWorkspace(to session: Session?) {
         captureWorkspace()
-        let key = Self.workspaceKey(for: session)
+        let key = selected.flatMap { splitTrees[$0] == nil ? nil : "split:" + $0.uuidString } ?? Self.workspaceKey(for: session)
         restoringWorkspace = true
         if key != workspaceKey {
             workspaceKey = key
@@ -262,8 +327,9 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
             layout = state.layout.applying(to: layout); localPath = state.localPath; localSelection = []; localSelectionSupportsTransfer = false
         }
         layout.sidebarPage = session == nil || session?.isStartPage == true ? "hosts" : "monitor"
-        if let session { layout.monitorVisible = session.sidebarVisible }
-        if session?.isLocalTerminal == true { layout.panel = "文件" }
+        if let tree = activeSplitTree { for id in tree.leaves { self.session(id)?.sidebarVisible = layout.monitorVisible } }
+        else if let session { layout.monitorVisible = session.sidebarVisible }
+        if session?.isLocalTerminal == true && activeSplitTree == nil { layout.panel = "文件" }
         restoringWorkspace = false
         if let session { setFileBrowserVisible(layout.panelVisible, for: session) }
         reconcileMonitoring()
@@ -289,7 +355,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     }
     func presentHostEditor(_ host: SSHHost? = nil, group: String? = nil) {
         guard !hostManagerPresented else { return }
-        hostToEdit = host
+        hostToEdit = host; hostCopyDraft = nil
         newHostGroup = group
         hostManagerPresented = true
     }
@@ -308,13 +374,18 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         selected = sessions[(index + direction + sessions.count) % sessions.count].id
     }
 
-    var active: Session? { sessions.first { $0.id == selected } }
+    var active: Session? {
+        guard let focused = focusedTerminal else { return nil }
+        // Keep a stable auxiliary connection while focus moves between terminals of the same host.
+        if activeSplitTree != nil, focused.host != nil { return auxiliaryOwner(for: focused) }
+        return focused
+    }
     func fileProtocol(for session: Session) -> SSHCommands.FileProtocol {
         guard let host = session.host else { return .sftp }
         if let saved = hosts.first(where: { $0.id == host.id }) { return saved.fileProtocol ?? .sftp }
         return host.fileProtocol ?? .sftp
     }
-    func log(_ message: String, activity: TabActivity? = nil) { (activity ?? active?.activity)?.append(message) }
+    func log(_ message: String, activity: TabActivity? = nil) { (activity ?? focusedTerminal?.activity)?.append(message) }
     var displayHosts: [SSHHost] { hosts.map { (try? resolvedHost($0)) ?? $0 } }
     func resolvedHost(_ host: SSHHost) throws -> SSHHost {
         guard let id = host.credentialID else { return host }
@@ -341,7 +412,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         for context in authenticationContexts(for: profile.id) { context.replaceCachedSecret(nil) }
     }
     private func authenticationContexts(for credentialID: UUID) -> [AuthenticationContext] {
-        let contexts = (sessions + Array(retiringSessions.values)).compactMap(\.authentication) + transfers.compactMap(\.authentication)
+        let contexts = (allSessions + Array(retiringSessions.values)).compactMap(\.authentication) + transfers.compactMap(\.authentication)
         var seen = Set<ObjectIdentifier>()
         return contexts.filter { $0.host.credentialID == credentialID && seen.insert(ObjectIdentifier($0)).inserted }
     }
@@ -349,9 +420,9 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         try validateLoginSecret(secret)
         transientSecrets[host.id] = secret.isEmpty ? nil : secret
     }
-    private func authentication(for host: SSHHost) throws -> AuthenticationContext {
+    func authentication(for host: SSHHost) throws -> AuthenticationContext {
         let secret = try (host.credentialID.map { try credentialStore.secrets.read($0) } ?? hostSecrets.read(host.id)) ?? transientSecrets[host.id]
-        return AuthenticationContext(host: host, secret: secret, prompts: authenticationPrompts) { [weak self] value in self?.persistPromptSecret(value, for: host) }
+        return AuthenticationContext(host: host, secret: secret, prompts: authenticationPrompts, askpassHelper: authenticationHelper) { [weak self] value in self?.persistPromptSecret(value, for: host) }
     }
     private func sameLogin(_ a: SSHHost, _ b: SSHHost) -> Bool {
         a.address == b.address && a.port == b.port && a.user == b.user && a.authentication == b.authentication && a.identity == b.identity && a.credentialID == b.credentialID
@@ -392,10 +463,25 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         }
         transientSecrets[host.id] = nil
         if previousProtocol != (host.fileProtocol ?? .sftp) {
-            for session in sessions where session.host?.id == host.id && session.connected && !session.fileMutationInProgress {
+            for session in allSessions where session.host?.id == host.id && session.connected && !session.fileMutationInProgress {
                 refreshDirectory(session)
             }
         }
+    }
+    @discardableResult func copyHost(_ original: SSHHost) throws -> SSHHost {
+        let original = hosts.first { $0.id == original.id } ?? original
+        var copy = original; copy.id = UUID(); copy.transportCommand = nil
+        let base = T("%@ 副本", original.name)
+        copy.name = base
+        var index = 2
+        while hosts.contains(where: { $0.name.localizedCaseInsensitiveCompare(copy.name) == .orderedSame }) { copy.name = base + " (\(index))"; index += 1 }
+        let secret = original.credentialID == nil ? (try hostSecrets.read(original.id)) ?? transientSecrets[original.id] ?? "" : ""
+        let resolved = try resolvedHost(original)
+        let secrets = original.credentialID == nil ? LoginSecrets(stored: secret, method: resolved.authentication ?? .automatic) : try loginSecrets(for: original)
+        hostToEdit = nil; newHostGroup = nil
+        hostCopyDraft = HostCopyDraft(host: copy, secrets: secrets)
+        hostManagerPresented = true
+        return copy
     }
     func save(_ requestedHost: SSHHost) throws {
         var host = requestedHost
@@ -406,6 +492,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         }
         if let hostReadFailure { throw SSHError.invalid(T("原主机配置读取失败，已保留文件。请修复 hosts.json 并重新打开应用：%@", hostReadFailure)) }
         try host.validate()
+        _ = try SSHRoute.chain(for: host, hosts: hosts.filter { $0.id != host.id } + [host], proxies: settings.proxies)
         guard !hosts.contains(where: { $0.id != host.id && $0.name.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(host.name.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame }) else { throw SSHError.invalid("主机名称已存在") }
         _ = try resolvedHost(host)
         var updated = hosts
@@ -548,6 +635,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     }
     func deleteHost(_ host: SSHHost) throws {
         if let hostReadFailure { throw SSHError.invalid(T("原主机配置读取失败，已保留文件。请修复 hosts.json 并重新打开应用：%@", hostReadFailure)) }
+        guard !hosts.contains(where: { $0.upstream == .host(host.id) }) else { throw SSHError.invalid("请先解除主机对该跳板机的引用") }
         let updated = hosts.filter { $0.id != host.id }
         let previous = try hostSecrets.read(host.id)
         try hostSecrets.delete(host.id)
@@ -580,7 +668,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         let current = hosts.first { $0.id == host.id } ?? host
         return current.customIcon ?? current.detectedSystem ?? "server"
     }
-    private func makeSession(_ host: SSHHost?, authenticationOverride: AuthenticationContext? = nil, monitorSelection: MonitorSelection? = nil, activity: TabActivity? = nil) throws -> Session {
+    func makeSession(_ host: SSHHost?, authenticationOverride: AuthenticationContext? = nil, monitorSelection: MonitorSelection? = nil, activity: TabActivity? = nil) throws -> Session {
         let host = try host.map { try resolvedHost($0) }
         let auth = try authenticationOverride ?? host.map { try authentication(for: $0) }
         let session = try Session(host: host, commands: commands, fontSize: layout.fontSize, authentication: auth, activity: activity)
@@ -590,11 +678,23 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         session.remotePath = workspace(for: key).remotePath
         session.sidebarVisible = workspace(for: key).layout.monitorVisible
         session.monitor.restoreSelection(monitorSelection ?? workspace(for: key).monitorSelection ?? MonitorSelection())
-        session.monitor.selectionChanged = { [weak self] selection in
-            guard let self, !self.shuttingDown else { return }
+        session.monitor.selectionChanged = { [weak self, weak session] selection in
+            guard let self, let session, !self.shuttingDown else { return }
+            guard !self.isSplitSession(session) else { return }
             var state = self.workspace(for: key); state.monitorSelection = selection.validated()
             self.workspaces.states[key] = state; self.saveLayout()
         }
+        session.terminal.onFocus = { [weak self, weak session] in
+            guard let self, let session, self.focusedTerminal?.id != session.id, self.isSplitSession(session) else { return }
+            self.focusPane(session)
+        }
+        session.terminal.splitMenu = { [weak self, weak session] in
+            guard let self, let session else { return NSMenu() }
+            var actions = self.splitActions(for: session)
+            if self.isSplitSession(session) { actions.append(.init(T("关闭当前终端")) { [weak self, weak session] in if let session { self?.removePane(session) } }) }
+            return SplitNativeMenu.make(actions)
+        }
+        session.terminal.acceptsRemotePaths = { [weak session] in session?.phase == .running }
         session.terminal.configure(settings.validated())
         session.prepareConnection = { [weak self] session in self?.prepare(session) }
         session.onExit = { [weak self] ended in
@@ -627,7 +727,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         if case .failed(let message) = ended.phase { detail = message } else { detail = ended.status }
         log(T(ended.host == nil ? "本地终端 %@" : "远程连接 %@", detail), activity: ended.activity)
         guard !shuttingDown, settings.autoReconnect, !ended.wasStopped, ended.host != nil,
-              sessions.contains(where: { $0 === ended }), reconnectJobs[ended.id] == nil else { return }
+              allSessions.contains(where: { $0 === ended }), reconnectJobs[ended.id] == nil else { return }
         let eligible: Bool
         switch ended.phase {
         case .exited(let code): eligible = code == 255 && ended.connectedAt != nil
@@ -647,7 +747,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
             defer { self.reconnectJobs[ended.id] = nil }
             ended.reconnectPending = false
             guard !self.shuttingDown, self.settings.autoReconnect, !ended.wasStopped, attempt <= self.settings.validated().reconnectAttempts,
-                  self.sessions.contains(where: { $0 === ended }), let original = ended.host else { return }
+                  self.allSessions.contains(where: { $0 === ended }), let original = ended.host else { return }
             let host = self.hosts.first { $0.id == original.id } ?? original
             guard (try? self.resolvedHost(host)).map({ self.sameLogin($0, original) }) == true else { return }
             do {
@@ -657,8 +757,8 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     }
     private func cancelAutomaticReconnects() {
         for job in reconnectJobs.values { job.cancel() }; reconnectJobs.removeAll()
-        for session in sessions { session.reconnectPending = false }
-        for session in sessions where session.isAutomaticReconnect && session.phase == .connecting { session.stop() }
+        for session in allSessions { session.reconnectPending = false }
+        for session in allSessions where session.isAutomaticReconnect && session.phase == .connecting { session.stop() }
     }
     private func prepare(_ session: Session) {
         guard !shuttingDown, let host = session.host else { return }
@@ -667,6 +767,24 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
             defer { fileJobs[token] = nil; session.connectionJob = nil }
             do {
                 try Task.checkCancellation()
+                let chain = try SSHRoute.chain(for: hosts.first(where: { $0.id == host.id }) ?? host, hosts: hosts, proxies: settings.proxies)
+                let route = try SSHRouteConnection(wireGuardPool: wireGuardPool)
+                session.routeConnection = route
+                var routed: SSHHost? = nil
+                for item in chain {
+                    try Task.checkCancellation()
+                    var next = try resolvedHost(item)
+                    if let previous = routed {
+                        next.transportCommand = try await route.jump(previous, to: next, commands: commands, authentication: authentication(for: previous), allowPrompts: !session.isAutomaticReconnect)
+                    } else if case .proxy(let id) = item.upstream {
+                        guard let proxy = settings.proxies.first(where: { $0.id == id }) else { throw SSHError.invalid("找不到代理服务器") }
+                        let password = try FileSecretStore(directory: root.appendingPathComponent("proxy-secrets")).read(id) ?? ""
+                        next.transportCommand = try await route.proxy(proxy, password: password, target: next)
+                    }
+                    routed = next
+                }
+                guard let host = routed else { throw SSHError.invalid("找不到上游跳板机") }
+                try session.installTransport(host: host, authentication: authentication(for: host), commands: commands)
                 let lease = try session.authentication?.lease(allowPrompts: !session.isAutomaticReconnect); defer { lease?.close() }
                 let result: ConnectionVerification
                 if let lease { result = try await lease.verifyConnection(host, commands: commands) }
@@ -685,7 +803,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
                 session.connectionSecurity = result.security
                 session.connectionPrepared()
                 if session.connected {
-                    refreshDirectory(session)
+                    if isAuxiliaryOwner(session) { refreshDirectory(session) } else { session.initialDirectoryAttemptCompleted = true; reconcileMonitoring() }
                     if (hosts.first(where: { $0.id == host.id }) ?? host).detectedSystemVersion != HostSystemIcon.detectionVersion {
                         @MainActor func probeSystem(_ command: String) async throws -> CommandResult {
                             let probe = try commands.execute(host, command: command)
@@ -712,7 +830,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     private func applyMonitorInterval() {
         guard !shuttingDown else { return }
         let interval = settings.validated().monitorInterval
-        let affected = sessions.filter { $0.monitor.running && $0.monitor.interval != interval }
+        let affected = allSessions.filter { $0.monitor.running && $0.monitor.interval != interval }
         guard !affected.isEmpty else { return }
         for session in affected {
             monitorJobs.removeValue(forKey: session.id)?.task.cancel(); session.monitor.stop()
@@ -720,12 +838,12 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         reconcileMonitoring()
     }
     func reconcileMonitoring() {
-        let eligible = Set(sessions.filter { !shuttingDown && $0.sidebarVisible && $0.readyForMonitoring }.map(\.id))
+        let eligible = Set(allSessions.filter { !shuttingDown && isAuxiliaryOwner($0) && $0.sidebarVisible && $0.readyForMonitoring }.map(\.id))
         for id in Array(monitorJobs.keys) where !eligible.contains(id) {
             monitorJobs.removeValue(forKey: id)?.task.cancel()
-            sessions.first { $0.id == id }?.monitor.stop()
+            allSessions.first { $0.id == id }?.monitor.stop()
         }
-        for session in sessions where eligible.contains(session.id) && monitorJobs[session.id] == nil {
+        for session in allSessions where eligible.contains(session.id) && monitorJobs[session.id] == nil {
             let token = UUID()
             let task = Task { [weak self, weak session] in
                 guard !Task.isCancelled, let self, let session, session.readyForMonitoring, session.sidebarVisible, !self.shuttingDown else { return }
@@ -750,7 +868,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
     }
     func reconnect(_ session: Session) {
-        guard !shuttingDown, sessions.contains(where: { $0 === session }), !session.isStartPage, restartJobs[session.id] == nil, !session.restarting else { return }
+        guard !shuttingDown, allSessions.contains(where: { $0 === session }), !session.isStartPage, restartJobs[session.id] == nil, !session.restarting else { return }
         reconnectJobs.removeValue(forKey: session.id)?.cancel(); session.reconnectPending = false
         do {
             let host = try session.host.map { original in try resolvedHost(hosts.first { $0.id == original.id } ?? original) }
@@ -765,8 +883,28 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
             }
         } catch { self.error = error.localizedDescription }
     }
+    func retirePane(_ session: Session) {
+        reconnectJobs.removeValue(forKey: session.id)?.cancel(); restartJobs.removeValue(forKey: session.id)?.cancel()
+        session.stop()
+        if session.terminal.process.running || session.terminal.process.windingDown { retiringSessions[session.id] = session }
+        for transfer in transfers where transfer.activity === session.activity { cancel(transfer.id) }
+        session.authentication?.replaceCachedSecret(nil); session.activity.close()
+    }
+    func reorderTabs(_ ids: [UUID], before target: UUID?) {
+        guard let reordered = TabOrdering.moving(sessions, ids: ids, before: target, id: \.id),
+              reordered.map(\.id) != sessions.map(\.id) else { return }
+        sessions = reordered
+    }
     func close(_ session: Session) {
         if tabRenameTarget === session { tabRenameTarget = nil }
+        if let tree = splitTrees.removeValue(forKey: session.id) {
+            for id in tree.leaves where id != session.id {
+                if let child = splitSessions.removeValue(forKey: id) {
+                    retirePane(child)
+                }
+            }
+            splitFocus[session.id] = nil; splitAuxiliaryOwners[session.id] = nil
+        }
         guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
         reconnectJobs.removeValue(forKey: session.id)?.cancel()
         restartJobs.removeValue(forKey: session.id)?.cancel()
@@ -806,7 +944,11 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
     func showPendingTransfers() {
         // Prefer the current tab's work, then bring the next task's owner forward.
         let task = pendingTransfers.first { $0.activity === active?.activity } ?? pendingTransfers.first
-        if let owner = sessions.first(where: { $0.activity === task?.activity }) { selected = owner.id }
+        if let owner = allSessions.first(where: { $0.activity === task?.activity }) {
+            if isSplitSession(owner) { focusPane(owner) } else { selected = owner.id }
+        } else if let host = task?.host, let owner = allSessions.first(where: { $0.host?.id == host.id }) {
+            if isSplitSession(owner) { focusPane(owner) } else { selected = owner.id }
+        }
         layout.panel = "传输"; layout.panelVisible = true
     }
     func refreshDirectory(_ session: Session) {
@@ -823,8 +965,8 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         for token in filePlans where filePlanOwners[token] === session.activity {
             fileJobs[token]?.cancel(); fileConflicts.cancel(scope: token)
         }
-        for transfer in transfers where transfer.activity === session.activity && ["排队中", "传输中"].contains(transfer.state) {
-            if shuttingDown { cancel(transfer.id); continue }
+        for transfer in transfers where transfer.activity === session.activity && ["排队中", "传输中", "已暂停"].contains(transfer.state) {
+            if shuttingDown || transfer.operationTitle != nil { cancel(transfer.id); continue }
             pausedTransfers.insert(transfer.id)
             update(transfer.id, state: "已暂停")
             fileConflicts.cancel(scope: transfer.id); jobs[transfer.id]?.cancel()
@@ -834,16 +976,21 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         }
     }
     func canResumeTransfer(_ transfer: Transfer) -> Bool {
-        transfer.state == "已暂停" && jobs[transfer.id] == nil && sessions.contains {
+        if transfer.state == "已暂停", (jobs[transfer.id] != nil || fileOperationTokens[transfer.id].flatMap { fileJobs[$0] } != nil), transfer.control.isPaused { return true }
+        return transfer.state == "已暂停" && jobs[transfer.id] == nil && allSessions.contains {
             $0.activity === transfer.activity && $0.connected && $0.phase == .running &&
             $0.host?.address == transfer.host.address && $0.host?.port == transfer.host.port && $0.host?.user == transfer.host.user
         }
     }
     func resumeTransfer(_ id: UUID) {
+        if let transfer = transfers.first(where: { $0.id == id }), transfer.state == "已暂停", (jobs[id] != nil || fileOperationTokens[id].flatMap { fileJobs[$0] } != nil), transfer.control.isPaused {
+            transfer.control.resume(); update(id, state: "传输中"); return
+        }
         guard let index = transfers.firstIndex(where: { $0.id == id }), canResumeTransfer(transfers[index]),
-              let session = sessions.first(where: { $0.activity === transfers[index].activity }) else { return }
+              let session = allSessions.first(where: { $0.activity === transfers[index].activity }) else { return }
         // A resume retries the task, not an unsafe assumption about a partial
         // remote file. Existing folder/file conflicts are checked again.
+        transfers[index].control = FileTransferControl(); transfers[index].control.preserveFilePermissions = !transfers[index].editorOwned; transfers[index].completedBytes = 0; transfers[index].bytesPerSecond = 0
         transfers[index].authentication = session.authentication
         transfers[index].askConflicts = true
         pausedTransfers.remove(id); update(id, state: "排队中"); schedule()
@@ -858,11 +1005,23 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         guard let host = session.host else { return }
         session.directoryReadInterrupted = false
         let token = UUID(), authentication = session.authentication, method = fileProtocol(for: session)
+        let record: UUID?
+        var mutationControl: FileTransferControl?
+        if !operations.isEmpty {
+            let sourcePaths = Set(operations.flatMap(\.sourcePaths))
+            let bytes = session.remoteDirectory?.entries.filter { sourcePaths.contains($0.path) && $0.kind == .file }.reduce(UInt64(0)) { FileByteCount.adding($0, $1.size ?? 0) } ?? 0
+            let row = Transfer(host: host, local: path, remote: operations.map(\.displayPath).joined(separator: "\n"), upload: true, method: method, downloadTarget: nil, activity: session.activity, pauseSupported: method == .sftp, startedAt: Date(), totalBytes: bytes, operationTitle: operations.first?.title, state: "传输中")
+            transfers.append(row); record = row.id; fileOperationTokens[row.id] = token
+            mutationControl = row.control
+            row.control.onProgress = { [weak self, id = row.id] progress in Task { @MainActor in self?.updateProgress(id, progress: progress) } }
+            row.control.setTotal(bytes)
+        } else { record = nil }
         session.listingRequest = token; session.listingBusy = true; session.listingError = nil; session.fileMutationInProgress = !operations.isEmpty
         session.remoteDirectory = nil; session.remoteSelection = []
         session.listingJob = Task { [weak session] in
             defer {
                 fileJobs[token] = nil
+                if let record { fileOperationTokens[record] = nil }
                 if let session, session.listingRequest == token {
                     session.listingBusy = false; session.listingJob = nil; session.fileMutationInProgress = false
                     if session.connected { session.initialDirectoryAttemptCompleted = true; reconcileMonitoring() }
@@ -880,34 +1039,39 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
                     else { directory = try await SSHFileClient().perform(invocation) }
                 } else {
                     let invocation = try commands.sftpSubsystem(host)
-                    if let lease { directory = try await lease.performSFTP(operation, invocation: invocation) }
-                    else { directory = try await SFTPClient().perform(operation, invocation: invocation) }
+                    if let lease { directory = try await lease.performSFTP(operation, invocation: invocation, control: mutationControl) }
+                    else { directory = try await SFTPClient().perform(operation, invocation: invocation, control: mutationControl) }
                 }
                 try Task.checkCancellation()
-                guard let session, session.listingRequest == token, let directory else { return }
+                guard let session, session.listingRequest == token, let directory else { if let record { update(record, state: "已取消") }; return }
                 lease?.confirmAuthentication()
                 session.remoteDirectory = directory; session.remotePath = directory.path; session.remoteSelection = []
                 rememberRemotePath(session, directory.path)
-            } catch is CancellationError {} catch {
+                if let record { update(record, state: "成功") }
+            } catch is CancellationError { if let record { update(record, state: "已取消") } } catch {
+                if let record { update(record, state: "失败", detail: error.localizedDescription) }
                 guard let session, session.listingRequest == token else { return }
                 session.listingError = error.localizedDescription
             }
         }
         fileJobs[token] = session.listingJob
     }
-    func performLocalFileOperation(_ operation: @escaping @Sendable () throws -> Void) async throws {
+    func performLocalFileOperation(title: String = "文件操作", paths: String = "", size: UInt64 = 0, _ operation: @escaping @Sendable () throws -> Void) async throws {
         guard !shuttingDown else { throw CancellationError() }
         let token = UUID()
+        let row = Transfer(host: SSHHost(name: T("本地"), address: "localhost", user: NSUserName()), local: paths, remote: paths, upload: true, method: .sftp, downloadTarget: nil, activity: active?.activity, pauseSupported: false, startedAt: Date(), totalBytes: size, operationTitle: title, state: "传输中")
+        transfers.append(row); fileOperationTokens[row.id] = token
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             fileJobs[token] = Task {
-                defer { fileJobs[token] = nil }
+                defer { fileJobs[token] = nil; fileOperationTokens[row.id] = nil }
                 do {
                     try Task.checkCancellation()
                     // FileManager's synchronous operations cannot be interrupted
                     // safely. Finish an already-started operation before exit.
                     try await Task.detached { try operation() }.value
-                    continuation.resume()
-                } catch { continuation.resume(throwing: error) }
+                    update(row.id, state: "成功"); continuation.resume()
+                } catch is CancellationError { update(row.id, state: "已取消"); continuation.resume(throwing: CancellationError()) }
+                catch { update(row.id, state: "失败", detail: error.localizedDescription); continuation.resume(throwing: error) }
             }
         }
     }
@@ -920,18 +1084,30 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
             defer { fileJobs[token] = nil; filePlans.remove(token); filePlanOwners[token] = nil }
             do { try await operation(token) }
             catch is CancellationError {}
-            catch { self.error = error.localizedDescription }
+            catch {
+                if let owner = activity ?? active?.activity {
+                    let host = allSessions.first { $0.activity === owner }?.host ?? SSHHost(name: T("本地"), address: "localhost", user: NSUserName())
+                    let row = Transfer(host: host, local: "", remote: error.localizedDescription, upload: true, method: .sftp, downloadTarget: nil, activity: owner, operationTitle: "文件操作", state: "失败", detail: error.localizedDescription)
+                    transfers.append(row)
+                }
+                self.error = error.localizedDescription
+            }
         }
     }
     func fileConflict(path: String, directory: Bool, scope: UUID, rename: URL? = nil) async throws -> FileConflictChoice {
         fileConflicts.window = authenticationPrompts.window
         return try await fileConflicts.ask(path: path, directory: directory, scope: scope, rename: rename)
     }
-    func enqueue(local: String, remote: String, upload: Bool, method: SSHCommands.FileProtocol, host target: SSHHost? = nil, authentication context: AuthenticationContext? = nil, overwrite: Bool = false, directory: Bool = false, askConflicts: Bool = false, activity owner: TabActivity? = nil) {
-        guard !shuttingDown else { return }
-        guard let host = target ?? active?.host else { error = T("请先打开远程会话"); return }
-        guard let owner = owner ?? active?.activity else { error = T("请先打开远程会话"); return }
-        guard !owner.isClosed else { return }
+    func recordFileFailure(_ message: String, title: String, host: SSHHost? = nil, paths: String = "", activity: TabActivity? = nil) {
+        let host = host ?? active?.host ?? SSHHost(name: T("本地"), address: "localhost", user: NSUserName())
+        transfers.append(Transfer(host: host, local: paths, remote: paths, upload: true, method: host.fileProtocol ?? .sftp, downloadTarget: nil, activity: activity ?? active?.activity, startedAt: Date(), operationTitle: title, state: "失败", detail: message))
+        error = message
+    }
+    func enqueue(local: String, remote: String, upload: Bool, method: SSHCommands.FileProtocol, host target: SSHHost? = nil, authentication context: AuthenticationContext? = nil, overwrite: Bool = false, directory: Bool = false, askConflicts: Bool = false, activity owner: TabActivity? = nil, editorOwned: Bool = false, completion: ((Bool) -> Void)? = nil) {
+        guard !shuttingDown else { completion?(false); return }
+        guard let host = target ?? active?.host else { error = T("请先打开远程会话"); completion?(false); return }
+        guard let owner = owner ?? active?.activity else { error = T("请先打开远程会话"); completion?(false); return }
+        guard !owner.isClosed else { completion?(false); return }
         do {
             _ = try commands.transfer(host, local: local, remote: remote, upload: upload, method: method)
             let authentication: AuthenticationContext
@@ -939,8 +1115,9 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
             else if target == nil, let current = active?.authentication { authentication = current }
             else { authentication = try self.authentication(for: resolvedHost(host)) }
             let downloadTarget = try upload ? nil : DownloadTarget(destination: URL(fileURLWithPath: local))
-            transfers.append(Transfer(host: host, local: downloadTarget?.destination.path ?? local, remote: remote, upload: upload, method: method, overwrite: overwrite, directory: directory, askConflicts: askConflicts, downloadTarget: downloadTarget, authentication: authentication, activity: owner)); schedule()
-        } catch { self.error = error.localizedDescription }
+            let control = FileTransferControl(); control.preserveFilePermissions = !editorOwned
+            transfers.append(Transfer(host: host, local: downloadTarget?.destination.path ?? local, remote: remote, upload: upload, method: method, overwrite: overwrite, directory: directory, askConflicts: askConflicts, downloadTarget: downloadTarget, authentication: authentication, activity: owner, control: control, editorOwned: editorOwned, completion: completion)); schedule()
+        } catch { recordFileFailure(error.localizedDescription, title: upload ? "上传" : "下载", host: host, paths: local + " → " + remote, activity: owner); completion?(false) }
     }
     private func schedule() {
         // Keep in-flight rows until cancellation reaps their process: they still
@@ -951,12 +1128,14 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         var destinations = activeTransfers
         var hostCounts = Dictionary(grouping: activeTransfers, by: { $0.host.id }).mapValues(\.count)
         for transfer in transfers where transfer.state == "排队中" {
-            if let owner = sessions.first(where: { $0.activity === transfer.activity }), owner.host != nil, !owner.connected || owner.phase != .running {
+            if let owner = allSessions.first(where: { $0.activity === transfer.activity }), owner.host != nil, !owner.connected || owner.phase != .running {
                 pausedTransfers.insert(transfer.id); update(transfer.id, state: "已暂停"); continue
             }
             guard jobs.count < 3 else { break }
             guard !destinations.contains(where: { $0.conflicts(with: transfer) }), hostCounts[transfer.host.id, default: 0] < 2 else { continue }
             destinations.append(transfer); hostCounts[transfer.host.id, default: 0] += 1
+            transfer.control.onProgress = { [weak self, id = transfer.id] progress in Task { @MainActor in self?.updateProgress(id, progress: progress) } }
+            if let index = transfers.firstIndex(where: { $0.id == transfer.id }), transfers[index].startedAt == nil { transfers[index].startedAt = Date() }
             update(transfer.id, state: "传输中")
             jobs[transfer.id] = Task {
                 do {
@@ -966,26 +1145,22 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
                         update(transfer.id, state: "成功")
                         if skipped > 0, let index = transfers.firstIndex(where: { $0.id == transfer.id }) { transfers[index].detail = T("已跳过 %d 项", skipped) }
                         if transfer.upload {
-                            for session in sessions where session.host?.id == transfer.host.id && !session.fileMutationInProgress && Self.remoteListingPath(session.remotePath) == (transfer.remote as NSString).deletingLastPathComponent { refreshDirectory(session) }
-                        } else { refreshLocalFiles() }
+                            for session in allSessions where session.host?.id == transfer.host.id && !session.fileMutationInProgress && Self.remoteListingPath(session.remotePath) == (transfer.remote as NSString).deletingLastPathComponent { refreshDirectory(session) }
+                        } else if !transfer.editorOwned { refreshLocalFiles() }
                         jobs[transfer.id] = nil; schedule()
                         return
                     }
-                    let download = try transfer.downloadTarget.map { try DownloadStaging(target: $0, overwrite: transfer.overwrite) }
+                    let overwrite = try await confirmDownloadOverwrite(transfer)
+                    let download = try transfer.downloadTarget.map { try DownloadStaging(target: $0, overwrite: overwrite) }
                     defer { download?.close() }
-                    let lease = try transfer.authentication?.lease()
-                    defer { lease?.close() }
-                    var invocation = try commands.transfer(transfer.authentication?.host ?? transfer.host, local: download?.fileURL.path ?? transfer.local, remote: transfer.remote, upload: transfer.upload, method: transfer.method)
-                    invocation.environment = lease?.environment ?? [:]
-                    let result: CommandResult
-                    if let lease { result = try await lease.run(invocation) } else { result = try await ProcessRunner().run(invocation) }
-                    try Task.checkCancellation()
-                    if result.status == 0 { lease?.confirmAuthentication(); try download?.commit() }
-                    update(transfer.id, state: result.status == 0 ? "成功" : "失败", detail: result.output)
-                    if result.status == 0 {
+                    try await TransferConnection(commands: commands, transfer: transfer).file(local: download?.fileURL.path ?? transfer.local, remote: transfer.remote, upload: transfer.upload)
+                    try Task.checkCancellation(); try download?.commit()
+                    update(transfer.id, state: "成功")
+                    let succeeded = true
+                    if succeeded {
                         if transfer.upload {
-                            for session in sessions where session.host?.id == transfer.host.id && !session.fileMutationInProgress && Self.remoteListingPath(session.remotePath) == (transfer.remote as NSString).deletingLastPathComponent { refreshDirectory(session) }
-                        } else { refreshLocalFiles() }
+                            for session in allSessions where session.host?.id == transfer.host.id && !session.fileMutationInProgress && Self.remoteListingPath(session.remotePath) == (transfer.remote as NSString).deletingLastPathComponent { refreshDirectory(session) }
+                        } else if !transfer.editorOwned { refreshLocalFiles() }
                     }
                 } catch is TransferSkipped { update(transfer.id, state: "已跳过") }
                 catch is CancellationError { update(transfer.id, state: pausedTransfers.contains(transfer.id) ? "已暂停" : "已取消", detail: transfer.directory ? T("文件夹传输未完成，已完成的内容会保留。") : "") }
@@ -994,33 +1169,63 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
             }
         }
     }
+    func updateProgress(_ id: UUID, progress: FileTransferProgress) {
+        guard let index = transfers.firstIndex(where: { $0.id == id }), ["传输中", "已暂停"].contains(transfers[index].state) else { return }
+        var transfer = transfers[index]
+        let speed = transfer.state == "已暂停" ? 0 : progress.bytesPerSecond
+        guard transfer.completedBytes != progress.completed || transfer.totalBytes != progress.total || transfer.bytesPerSecond != speed else { return }
+        transfer.completedBytes = progress.completed; transfer.totalBytes = progress.total; transfer.bytesPerSecond = speed
+        // Publish a coherent snapshot once, without intermediate byte/total pairs.
+        transfers[index] = transfer
+    }
+    func canPauseTransfer(_ id: UUID) -> Bool {
+        guard let transfer = transfers.first(where: { $0.id == id }) else { return false }
+        return transfer.pauseSupported && (jobs[id] != nil || fileOperationTokens[id].flatMap { fileJobs[$0] } != nil)
+    }
+    func pauseTransfer(_ id: UUID) {
+        guard let transfer = transfers.first(where: { $0.id == id }), transfer.state == "传输中", canPauseTransfer(id) else { return }
+        transfer.control.pause(); update(id, state: "已暂停")
+    }
     private func update(_ id: UUID, state: String, detail: String = "") {
         guard let i = transfers.firstIndex(where: { $0.id == id }) else { return }
         let previousState = transfers[i].state
         transfers[i].state = state; transfers[i].detail = detail
+        if state == "传输中", transfers[i].startedAt == nil { transfers[i].startedAt = Date() }
+        if state != "传输中" { transfers[i].bytesPerSecond = 0 }
+        if state == "成功" {
+            let progress = transfers[i].control.snapshot
+            transfers[i].totalBytes = max(transfers[i].totalBytes, max(progress.total, progress.completed))
+            transfers[i].completedBytes = max(progress.completed, transfers[i].totalBytes)
+        }
         if previousState != state {
             let transfer = transfers[i]
             if let activity = transfer.activity {
-                log("\(T(transfer.upload ? "上传" : "下载")) \(T(state)) \(transfer.host.name) \(transfer.local) ↔ \(transfer.remote)" + (state == "失败" && !detail.isEmpty ? " · " + detail : ""), activity: activity)
+                log("\(transfer.operationTitle.map { T($0) } ?? T(transfer.upload ? "上传" : "下载")) \(T(state)) \(transfer.host.name) \(transfer.local) ↔ \(transfer.remote)" + (state == "失败" && !detail.isEmpty ? " · " + detail : ""), activity: activity)
             }
         }
-        if ["成功", "失败", "已取消", "已跳过"].contains(state) { transfers[i].authentication = nil }
+        if state == "失败", previousState != state { error = T("%@：%@", transfers[i].operationTitle.map { T($0) } ?? T(transfers[i].upload ? "上传" : "下载"), detail) }
+        if ["成功", "失败", "已取消", "已跳过"].contains(state) {
+            transfers[i].authentication = nil
+            let completion = transfers[i].completion; transfers[i].completion = nil; completion?(state == "成功")
+        }
     }
     func cancel(_ id: UUID) {
         guard let transfer = transfers.first(where: { $0.id == id }), ["排队中", "传输中", "已暂停"].contains(transfer.state) else { return }
-        pausedTransfers.remove(id)
-        if let task = jobs[id] { update(id, state: "正在取消"); task.cancel() }
+        pausedTransfers.remove(id); transfer.control.cancel()
+        if let token = fileOperationTokens[id], let task = fileJobs[token] { update(id, state: "正在取消"); task.cancel() }
+        else if let task = jobs[id] { update(id, state: "正在取消"); task.cancel() }
         else { update(id, state: "已取消") }
     }
-    var busy: Bool { !jobs.isEmpty || !filePlans.isEmpty || transfers.contains { ["排队中", "已暂停"].contains($0.state) } }
+    var busy: Bool { !jobs.isEmpty || !filePlans.isEmpty || !fileOperationTokens.isEmpty || transfers.contains { ["排队中", "已暂停"].contains($0.state) } }
     var hasPendingFileOperations: Bool { !fileJobs.isEmpty }
     var busyRunningTransfers: Bool { !jobs.isEmpty }
-    var hasLiveSessions: Bool { (sessions + Array(retiringSessions.values)).contains { !$0.isStartPage && $0.phase.isActive } }
+    var hasLiveSessions: Bool { (allSessions + Array(retiringSessions.values)).contains { !$0.isStartPage && $0.phase.isActive } }
     func shutdown() {
         guard !shuttingDown else { return }
         shuttingDown = true; tabRenameTarget = nil; tabNameDraft = ""; quitShortcut.uninstall()
         applicationAppearanceObservation?.invalidate(); applicationAppearanceObservation = nil; appearanceApplication = nil
         if let alert = transferConfirmation { alert.window.sheetParent?.endSheet(alert.window, returnCode: .alertSecondButtonReturn) }
+        fileEditor.shutdown()
         authenticationPrompts.cancelAll(); transientSecrets.removeAll()
         fileConflicts.cancelAll()
         layoutSaveTask?.cancel(); settingsSaveTask?.cancel(); saveLayout(); saveSettings(); cancelAutomaticReconnects()
@@ -1030,19 +1235,21 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, sh
         for value in monitorJobs.values { value.task.cancel() }; monitorJobs.removeAll()
         for task in jobs.values { task.cancel() }
         for task in fileJobs.values { task.cancel() }
-        for session in sessions + Array(retiringSessions.values) { session.stop() }
+        for session in allSessions + Array(retiringSessions.values) { session.stop() }
+        wireGuardPool.close()
     }
     func finishShutdown() async {
+        await wireGuardPool.finish()
         // Cancellation can finish a parent before a newly registered child is
         // visible in its first snapshot. Drain until all channels have reaped.
         repeat {
             let pending = Array(jobs.values) + Array(fileJobs.values)
             for task in pending { await task.value }
-            for session in sessions + Array(retiringSessions.values) { await session.monitor.stopAndWait() }
+            for session in allSessions + Array(retiringSessions.values) { await session.monitor.stopAndWait() }
             await Task.yield()
         } while !jobs.isEmpty || !fileJobs.isEmpty
         for _ in 0..<150 {
-            if (sessions + Array(retiringSessions.values)).allSatisfy({ $0.isStartPage || !$0.terminal.process.running }) { return }
+            if (allSessions + Array(retiringSessions.values)).allSatisfy({ $0.isStartPage || !$0.terminal.process.running }) { return }
             try? await Task.sleep(for: .milliseconds(20))
         }
     }

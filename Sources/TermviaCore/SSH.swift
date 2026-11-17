@@ -13,6 +13,10 @@ public struct SSHHost: Codable, Identifiable, Equatable, Sendable {
     public var group: String? = nil
     public var authentication: SSHAuthentication? = nil
     public var credentialID: UUID? = nil
+    public var upstream: SSHUpstream? = nil
+    /// Runtime transport, never persisted or accepted from a host document.
+    public var transportCommand: String? = nil
+    private enum CodingKeys: String, CodingKey { case id, name, address, user, port, identity, customIcon, detectedSystem, detectedSystemVersion, group, authentication, credentialID, fileProtocol, upstream }
     public var fileProtocol: SSHCommands.FileProtocol? = nil
     public init(name: String, address: String, user: String, port: Int = 22, identity: String = "") {
         self.name = name; self.address = address; self.user = user; self.port = port; self.identity = identity
@@ -62,6 +66,7 @@ public struct SSHCommands: Sendable {
                     "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=\(interactive ? "ask" : "yes")",
                     "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=\(keepAliveInterval)", "-o", "ServerAliveCountMax=3", "-o", "TCPKeepAlive=no",
                     "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no"]
+        if let transport = host.transportCommand { args += ["-o", "ProxyCommand=" + transport] }
         if suppressWarnings { args += ["-o", "WarnWeakCrypto=no", "-o", "LogLevel=ERROR"] }
         if !interactive { args += ["-o", "BatchMode=\(useAskpass ? "no" : "yes")"] }
         args += ["-o", "NumberOfPasswordPrompts=3"]

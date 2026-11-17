@@ -18,7 +18,7 @@ struct TransferSkipped: Error {}
     }
     private var pending: [Request] = []
     private var current: Request?
-    private(set) var alert: NSAlert?
+    private(set) var alert: CompactAlert?
     private var panel: NSSavePanel?
     private var observer: NSObjectProtocol?
     private weak var observedWindow: NSWindow?
@@ -48,11 +48,10 @@ struct TransferSkipped: Error {}
         }
         guard window.attachedSheet == nil else { return }
         let request = pending.removeFirst(); current = request
-        let alert = NSAlert(); self.alert = alert
+        let alert = CompactAlert(); self.alert = alert
         alert.messageText = T(request.directory ? "文件夹已存在：%@" : "文件已存在：%@", (request.path as NSString).lastPathComponent)
-        alert.informativeText = request.path + (request.directory ? "\n\n" + T("合并会保留目标独有内容；同名文件仍逐项询问是否覆盖。") : "\n\n" + T("是否覆盖目标中的同名文件？"))
+        alert.informativeText = request.path + (request.directory ? "\n\n" + T("同名文件另行确认覆盖。") : "")
         let accept = alert.addButton(withTitle: T(request.directory ? "合并" : "覆盖"))
-        accept.hasDestructiveAction = !request.directory
         if !request.directory { accept.keyEquivalent = "" }
         alert.addButton(withTitle: T("跳过"))
         alert.addButton(withTitle: T("取消")).keyEquivalent = "\u{1b}"

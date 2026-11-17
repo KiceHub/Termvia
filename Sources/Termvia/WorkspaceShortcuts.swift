@@ -39,7 +39,7 @@ extension AppModel {
     func canPerformShortcut(_ command: AppShortcutCommand) -> Bool {
         switch command {
         case .closeTab, .renameTab, .focusTerminal: return active != nil
-        case .reconnect: return active.map { !$0.isStartPage && !$0.restarting } ?? false
+        case .reconnect: return focusedTerminal.map { !$0.isStartPage && !$0.restarting } ?? false
         case .previousTab, .nextTab: return sessions.count > 1
         default: return true
         }
@@ -51,9 +51,9 @@ extension AppModel {
         case .localTerminal: connect(nil)
         case .showHosts: showHosts()
         case .newHost: showHosts(); presentHostEditor()
-        case .closeTab: if let active { close(active) }
-        case .reconnect: if let active { reconnect(active) }
-        case .renameTab: if let active { presentTabRename(active) }
+        case .closeTab: if let tab = sessions.first(where: { $0.id == selected }) { close(tab) }
+        case .reconnect: if let focusedTerminal { reconnect(focusedTerminal) }
+        case .renameTab: if let tab = sessions.first(where: { $0.id == selected }) { presentTabRename(tab) }
         case .previousTab: selectNext(-1)
         case .nextTab: selectNext(1)
         case .focusTerminal: focusTerminal()

@@ -8,23 +8,23 @@ extension AppModel {
         guard transferConfirmation == nil, let window = authenticationPrompts.window, window.attachedSheet == nil else {
             error = T("请先关闭当前对话框后再传输"); return
         }
-        let alert = NSAlert()
+        let alert = CompactAlert()
         alert.messageText = T(upload ? "确认上传？" : "确认下载？")
         alert.informativeText = ""
         let source = NSTextField(wrappingLabelWithString: sources.joined(separator: "\n"))
         let target = NSTextField(wrappingLabelWithString: destination)
         for field in [source, target] {
             field.isSelectable = true; field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-            field.preferredMaxLayoutWidth = 340; field.lineBreakMode = .byCharWrapping
-            field.widthAnchor.constraint(equalToConstant: 340).isActive = true
+            field.preferredMaxLayoutWidth = 252; field.lineBreakMode = .byCharWrapping
+            field.widthAnchor.constraint(equalToConstant: 252).isActive = true
         }
         let stack = NSStackView(views: [NSTextField(labelWithString: T("来源")), source, NSTextField(labelWithString: T("目标")), target])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
-        stack.widthAnchor.constraint(equalToConstant: 340).isActive = true
+        stack.widthAnchor.constraint(equalToConstant: 252).isActive = true
         let height = max(100, stack.fittingSize.height)
-        let document = TransferPathDocument(frame: NSRect(x: 0, y: 0, width: 340, height: height))
+        let document = TransferPathDocument(frame: NSRect(x: 0, y: 0, width: 252, height: height))
         stack.frame = document.bounds; document.addSubview(stack)
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 360, height: min(220, height)))
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 260, height: min(220, height)))
         scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.drawsBackground = false
         scroll.documentView = document; alert.accessoryView = scroll
         alert.addButton(withTitle: T("开始传输")); alert.addButton(withTitle: T("取消"))

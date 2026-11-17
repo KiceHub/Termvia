@@ -3,6 +3,7 @@ import Foundation
 /// A bounded, relative-path manifest. Links and special files are rejected,
 /// rather than following them outside the selected folder or omitting them.
 public struct TransferTree: Sendable {
+    public var totalBytes: UInt64 = 0
     public var directories: [String] = []
     public var files: [String] = []
     public init() {}
@@ -16,12 +17,13 @@ public struct TransferTree: Sendable {
             try Task.checkCancellation()
             let metadata = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard metadata.isDirectory == true, metadata.isSymbolicLink != true else { throw SSHError.invalid("文件夹传输不跟随符号链接或特殊文件") }
-            for child in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]) {
+            for child in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]) {
                 try Task.checkCancellation()
                 _ = try FilePaths.child(child.lastPathComponent, in: directory.path)
-                let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
+                let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
                 guard values.isSymbolicLink != true, values.isDirectory == true || values.isRegularFile == true else { throw SSHError.invalid("文件夹传输不跟随符号链接或特殊文件") }
                 let path = relative.isEmpty ? child.lastPathComponent : relative + "/" + child.lastPathComponent
+                if values.isRegularFile == true { result.totalBytes = FileByteCount.adding(result.totalBytes, UInt64(max(0, values.fileSize ?? 0))) }
                 try result.append(path, directory: values.isDirectory == true, depth: depth + 1)
                 if values.isDirectory == true { pending.append((child, path, depth + 1)) }
             }
@@ -38,6 +40,7 @@ public struct TransferTree: Sendable {
                 try Task.checkCancellation()
                 guard entry.path == (try FilePaths.child(entry.name, in: path)), entry.kind == .file || entry.kind == .directory else { throw SSHError.invalid("文件夹传输不跟随符号链接或特殊文件") }
                 let child = relative.isEmpty ? entry.name : relative + "/" + entry.name
+                if entry.kind == .file { result.totalBytes = FileByteCount.adding(result.totalBytes, entry.size ?? 0) }
                 try result.append(child, directory: entry.kind == .directory, depth: depth + 1)
                 if entry.kind == .directory { pending.append((entry.path, child, depth + 1)) }
             }

@@ -44,7 +44,7 @@ struct CredentialEditor: View {
                 }
                 Spacer()
                 Button(T("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(T("保存")) { save() }.keyboardShortcut(.defaultAction)
+                Button(T("保存")) { save() }.keyboardShortcut(.defaultAction).confirmationButton()
             }
         }.padding(24).frame(width: 480, height: 360)
             .workspaceEnvironment(model: model)
@@ -54,13 +54,13 @@ struct CredentialEditor: View {
                     catch { self.error = error.localizedDescription }
                 }
             }
-            .alert(T("删除此登录信息？"), isPresented: $deleting) {
-                Button(T("删除"), role: .destructive) {
+            .compactAlert(T("删除此登录信息？"), isPresented: $deleting, actions: [
+                .init(T("删除")) {
                     do { if let profile { try model.deleteCredential(profile) }; onSave(UUID()); dismiss() }
                     catch { self.error = error.localizedDescription }
-                }
-                Button(T("取消"), role: .cancel) {}
-            }
+                },
+                .init(T("取消"), role: .cancel)
+            ])
     }
     private func save() {
         let method: SSHAuthentication = identity.isEmpty ? .password : secret.isEmpty ? .privateKey : .keyAndPassword
@@ -98,7 +98,7 @@ struct IdentityControls: View {
                     .popover(isPresented: $editingPassphrase) {
                         VStack(alignment: .leading, spacing: 10) {
                             SecureField(T("密钥口令（可为空）"), text: passphrase)
-                            HStack { Spacer(); Button(T("确定")) { editingPassphrase = false }.keyboardShortcut(.defaultAction) }
+                            HStack { Spacer(); Button(T("确定")) { editingPassphrase = false }.keyboardShortcut(.defaultAction).confirmationButton() }
                         }.padding(14).frame(width: 260)
                     }
             }

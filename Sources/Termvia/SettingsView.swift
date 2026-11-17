@@ -9,11 +9,12 @@ struct SettingsView: View {
             .init(page: .general, content: AnyView(general)),
             .init(page: .terminal, content: AnyView(terminal)),
             .init(page: .connection, content: AnyView(connection)),
+            .init(page: .proxies, content: AnyView(ProxySettings(model: model))),
             .init(page: .shortcuts, content: AnyView(ShortcutSettings(model: model))),
             .init(page: .credentials, content: AnyView(LoginSettings(model: model))),
             .init(page: .about, content: AnyView(AboutSettings()))
-        ]).frame(width: 640, height: 590)
-            .background(SettingsWindowBridge(appearance: model.layout.appearance, title: T("Termvia 设置")).frame(width: 0, height: 0))
+        ], inputs: .init(model: model)).frame(width: 640, height: 590)
+            .background(SettingsWindowBridge(title: T("Termvia 设置")).frame(width: 0, height: 0))
 
 #if TERMVIA_DIAGNOSTICS
             .background(AppearanceCheckProbe(role: "settings"))
@@ -35,9 +36,22 @@ struct SettingsView: View {
             Section(T("工作区")) {
                 Toggle(T("显示侧栏"), isOn: $model.layout.monitorVisible)
                 Toggle(T("显示底部面板"), isOn: $model.layout.panelVisible)
+                Toggle(T("远程文件显示在左侧"), isOn: $model.settings.remoteFilesOnLeft)
                 Toggle(T("显示隐藏文件"), isOn: $model.layout.showHiddenFiles)
                 Toggle(T("双击标签页关闭"), isOn: $model.settings.doubleClickClosesTab).accessibilityIdentifier("Termvia.DoubleClickClosesTab")
                 SettingsNumberRow(title: "监控刷新间隔", value: $model.settings.monitorInterval, range: 1...30, unit: T("秒"), identifier: "Termvia.Monitor.Interval")
+            }
+            Section(T("文件编辑器")) {
+                Toggle(T("使用内置编辑器"), isOn: $model.settings.useBuiltInEditor)
+                HStack {
+                    Text(model.settings.externalEditorPath.isEmpty ? T("系统默认应用") : URL(fileURLWithPath: model.settings.externalEditorPath).deletingPathExtension().lastPathComponent)
+                    Spacer()
+                    Button(T("选择应用…")) {
+                        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowedContentTypes = [.application]
+                        if panel.runModal() == .OK, let url = panel.url { model.settings.externalEditorPath = url.path }
+                    }.disabled(model.settings.useBuiltInEditor)
+                    Button(T("重置")) { model.settings.externalEditorPath = "" }.disabled(model.settings.useBuiltInEditor)
+                }
             }
             Section {
                 Toggle(T("传输前确认"), isOn: $model.settings.confirmTransfers)
@@ -163,7 +177,6 @@ private struct TerminalColorPreview: NSViewRepresentable {
 }
 
 private struct SettingsWindowBridge: NSViewRepresentable {
-    let appearance: String
     let title: String
     func makeNSView(context: Context) -> NSView { NSView() }
     func updateNSView(_ view: NSView, context: Context) {
@@ -171,8 +184,6 @@ private struct SettingsWindowBridge: NSViewRepresentable {
             guard let window = view?.window else { return }
             window.identifier = NSUserInterfaceItemIdentifier("Termvia.Settings")
             if window.title != title { window.title = title }
-            let resolved = AppAppearance.override(for: appearance)
-            if window.appearance?.name != resolved?.name { window.appearance = resolved }
         }
     }
 }

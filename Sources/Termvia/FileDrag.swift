@@ -48,7 +48,9 @@ struct FileDragPayload: Codable, Sendable {
             }
         }
         group.notify(queue: .global()) {
-            let payload = Self(localPaths: collector.paths)
+            let paths = collector.paths
+            guard paths.count == urls.count else { return }
+            let payload = Self(localPaths: paths)
             RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { action(payload) } }
         }
         return true

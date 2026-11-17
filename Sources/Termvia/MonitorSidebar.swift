@@ -227,6 +227,9 @@ struct DiskCapacityGauge: View {
         HStack(spacing: 8) {
             Gauge(value: space?.used ?? 0, in: 0...max(1, space?.total ?? 1)) { EmptyView() }
                 .gaugeStyle(.linearCapacity).tint(space == nil ? Color.gray : AppTheme.accent).disabled(space == nil)
+                // Measurements are read-only. Keep the normal native fill,
+                // while preventing the embedded control from tracking input.
+                .allowsHitTesting(false).focusable(false)
                 .frame(minWidth: 36, maxWidth: .infinity)
                 .accessibilityIdentifier("Termvia.Monitor.Capacity.Bar")
             Text(values.display).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)

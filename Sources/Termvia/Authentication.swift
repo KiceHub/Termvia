@@ -9,7 +9,7 @@ import TermviaCore
     }
     private var pending: [Pending] = []
     private var current: Pending?
-    private var alert: NSAlert?
+    private var alert: CompactAlert?
     private var retry: Task<Void, Never>?
     func ask(_ request: AskpassRequest, host: String, scope: UUID) async -> String? {
         await withCheckedContinuation { continuation in
@@ -33,7 +33,7 @@ import TermviaCore
             return
         }
         let item = pending.removeFirst(); current = item
-        let alert = NSAlert(); self.alert = alert
+        let alert = CompactAlert(); self.alert = alert
         alert.messageText = item.request.isHostKeyConfirmation ? T("信任此服务器公钥？") : T("连接 %@", item.host)
         alert.informativeText = item.request.prompt
         let confirm = item.request.isHostKeyConfirmation || item.request.hint == "confirm"
@@ -41,7 +41,7 @@ import TermviaCore
         let field: NSSecureTextField?
         if confirm || notification { field = nil }
         else {
-            let input = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 24))
+            let input = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
             input.placeholderString = T("密码或密钥口令")
             alert.accessoryView = input; field = input
         }
@@ -84,6 +84,7 @@ import TermviaCore
     private var pendingPersistence: String?
     private let onSecret: ((String) -> Void)?
     private let ppkHelper: URL?
+    private let askpassHelper: URL?
     private var leaseScopes = Set<UUID>()
     private var ppkIdentity: PPKIdentity?
     private var ppkInfo: PPKConverter.Info?
@@ -92,9 +93,10 @@ import TermviaCore
     private var ppkGeneration = UUID()
     private var ppkAttempt: Attempt?
     private var ppkScope = UUID()
-    init(host: SSHHost, secret: String?, prompts: AuthenticationPrompts, ppkHelper: URL? = nil, onSecret: ((String) -> Void)? = nil) {
+    init(host: SSHHost, secret: String?, prompts: AuthenticationPrompts, ppkHelper: URL? = nil, askpassHelper: URL? = nil, onSecret: ((String) -> Void)? = nil) {
         self.host = host; self.prompts = prompts; self.onSecret = onSecret
         self.ppkHelper = ppkHelper
+        self.askpassHelper = askpassHelper
         let values = LoginSecrets(stored: secret, method: host.authentication ?? .automatic)
         self.secret = host.authentication == .privateKey ? (values.passphrase.isEmpty ? nil : values.passphrase) : (values.password.isEmpty ? nil : values.password)
         passphrase = values.passphrase; confirmedPassphrase = values.passphrase
@@ -127,7 +129,7 @@ import TermviaCore
     }
     private var pendingSecret: SecretQuestion?
     func lease(helper: URL? = nil, allowPrompts: Bool = true) throws -> AuthenticationLease {
-        let helper = helper ?? Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("termvia-askpass")
+        let helper = helper ?? askpassHelper ?? Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("termvia-askpass")
         guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw SSHError.invalid("认证辅助程序缺失，请重新构建应用") }
         let scope = UUID(), attempt = Attempt()
         let server = try AskpassServer { [self] request in await respond(request, attempt: attempt, scope: scope, allowPrompts: allowPrompts) }
@@ -327,15 +329,40 @@ import TermviaCore
             try await ConnectionVerifier.verify(prepareHost(), commands: commands, environment: environment)
         }, onCancel: { [weak self] in server.close(); Task { @MainActor in self?.close() } })
     }
-    func performSFTP(_ operation: SFTPOperation, invocation: Invocation) async throws -> RemoteDirectory? {
+    func performSFTP(_ operation: SFTPOperation, invocation: Invocation, control: FileTransferControl? = nil) async throws -> RemoteDirectory? {
         guard onClose != nil else { throw CancellationError() }
         let server = server
         return try await withTaskCancellationHandler(operation: {
             var invocation = try await prepareInvocation(invocation); invocation.environment.merge(environment) { _, new in new }
-            return try await SFTPClient().perform(operation, invocation: invocation)
+            return try await SFTPClient().perform(operation, invocation: invocation, control: control)
         }, onCancel: { [weak self] in
             server.close(); Task { @MainActor in self?.close() }
         })
+    }
+    func inspectFile(_ path: String, invocation: Invocation) async throws -> EditorFileInspection {
+        guard onClose != nil else { throw CancellationError() }
+        let server = server
+        return try await withTaskCancellationHandler(operation: {
+            var invocation = try await prepareInvocation(invocation); invocation.environment.merge(environment) { _, new in new }
+            return try await SFTPClient().inspectFile(path, invocation: invocation)
+        }, onCancel: { [weak self] in server.close(); Task { @MainActor in self?.close() } })
+    }
+    func resolveEntry(_ path: String, invocation: Invocation, method: SSHCommands.FileProtocol) async throws -> RemoteEntry {
+        guard onClose != nil else { throw CancellationError() }
+        let server = server
+        return try await withTaskCancellationHandler(operation: {
+            var invocation = try await prepareInvocation(invocation); invocation.environment.merge(environment) { _, new in new }
+            if method == .sftp { return try await SFTPClient().resolveEntry(path, invocation: invocation) }
+            return try await SSHFileClient().resolveEntry(invocation)
+        }, onCancel: { [weak self] in server.close(); Task { @MainActor in self?.close() } })
+    }
+    func performSCP(local: String, remote: String, upload: Bool, invocation: Invocation, control: FileTransferControl) async throws {
+        guard onClose != nil else { throw CancellationError() }
+        let server = server
+        try await withTaskCancellationHandler(operation: {
+            var invocation = try await prepareInvocation(invocation); invocation.environment.merge(environment) { _, new in new }
+            try await SFTPClient().performSCP(local: local, remote: remote, upload: upload, invocation: invocation, control: control)
+        }, onCancel: { server.close(); control.cancel(); Task { @MainActor [weak self] in self?.close() } })
     }
     func performSSHFiles(_ invocation: Invocation) async throws -> RemoteDirectory {
         guard onClose != nil else { throw CancellationError() }

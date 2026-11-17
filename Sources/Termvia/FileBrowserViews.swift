@@ -48,12 +48,14 @@ private struct LocalEntry: Identifiable, Sendable {
     let url: URL
     let directory: Bool
     let link: Bool
+    let targetKind: RemoteFileKind?
     let size: Int64
     let modified: Date
     let name: String
     let id: String
-    init(url: URL, directory: Bool, link: Bool, size: Int64, modified: Date) {
+    init(url: URL, directory: Bool, link: Bool, size: Int64, modified: Date, targetKind: RemoteFileKind? = nil) {
         self.url = url; self.directory = directory; self.link = link; self.size = size; self.modified = modified
+        self.targetKind = targetKind
         name = url.lastPathComponent; id = url.path
     }
 }
@@ -80,10 +82,22 @@ struct LocalFiles: View {
     @State private var deleting: [LocalEntry] = []
     @State private var newName = ""
     @State private var sortedEntries: [LocalEntry] = []
-    private var visible: [LocalEntry] { sortedEntries.filter { showHidden || !$0.name.hasPrefix(".") } }
+    @State private var visible: [LocalEntry] = []
+    @State private var tableRows: [NativeFileRow] = []
+    private func updateDisplayed() {
+        visible = sortedEntries.filter { showHidden || !$0.name.hasPrefix(".") }
+        tableRows = visible.map { item in
+            NativeFileRow(id: item.id, entry: RemoteEntry(name: item.name, path: item.url.path, kind: item.link ? .symbolicLink : item.directory ? .directory : .file, size: UInt64(max(0, item.size)), modified: item.modified, linkTargetKind: item.targetKind), localURL: item.url)
+        }
+    }
+    private func clearListing() {
+        entries = []; sortedEntries = []; visible = []; tableRows = []; loadedPath = nil
+        selected = []; model.localSelection = []; model.localSelectionSupportsTransfer = false
+    }
     private func updateVisible() {
         let sorted = entries.sorted(using: sortOrder)
         sortedEntries = sorted.filter(\.directory) + sorted.filter { !$0.directory }
+        updateDisplayed()
     }
     private var ready: Bool { !busy && !mutating && loadedPath == path }
     private func items(_ ids: Set<String>) -> [LocalEntry] { visible.filter { ids.contains($0.id) } }
@@ -109,42 +123,44 @@ struct LocalFiles: View {
                 model.localSelectionSupportsTransfer = !chosen.isEmpty && chosen.allSatisfy { !$0.link }
             }
             .onChange(of: sortOrder) { _, _ in updateVisible() }
-            .onChange(of: showHidden) { _, _ in selected.formIntersection(Set(visible.map(\.id))) }
-            .alert(T(creatingFile ? "新建文件" : "新建文件夹"), isPresented: $creating) {
-                TextField(T("名称"), text: $newName)
-                Button(T("创建")) {
+            .onChange(of: showHidden) { _, _ in updateDisplayed(); selected.formIntersection(Set(visible.map(\.id))) }
+            .compactAlert(T(creatingFile ? "新建文件" : "新建文件夹"), isPresented: $creating, message: path,
+                          input: .init(placeholder: T("名称"), text: $newName), actions: [
+                .init(T("创建")) {
                     do {
                         let target = try FilePaths.child(newName, in: path)
                         let file = creatingFile
-                        mutate {
+                        mutate(title: file ? "新建文件" : "新建文件夹", paths: target) {
                             if file { try Data().write(to: URL(fileURLWithPath: target), options: .withoutOverwriting) }
                             else { try FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: false) }
                         }
-                    } catch { self.error = error.localizedDescription }
-                }
-                Button(T("取消"), role: .cancel) {}
-            } message: { Text(path) }
-            .alert(T("重命名"), isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }), presenting: renaming) { entry in
-                TextField(T("名称"), text: $newName)
-                Button(T("保存")) {
+                    } catch { model.recordFileFailure(error.localizedDescription, title: "文件操作", paths: path) }
+                },
+                .init(T("取消"), role: .cancel)
+            ])
+            .compactAlert(T("重命名"), isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
+                          message: renaming?.url.path ?? "", input: .init(placeholder: T("名称"), text: $newName), actions: [
+                .init(T("保存")) {
+                    guard let entry = renaming else { return }
                     do {
                         let destination = try FilePaths.child(newName, in: entry.url.deletingLastPathComponent().path)
-                        mutate { try FileManager.default.moveItem(at: entry.url, to: URL(fileURLWithPath: destination)) }
-                    } catch { self.error = error.localizedDescription }
+                        mutate(title: "重命名", paths: entry.url.path + " → " + destination, size: UInt64(max(0, entry.size))) { try FileManager.default.moveItem(at: entry.url, to: URL(fileURLWithPath: destination)) }
+                    } catch { model.recordFileFailure(error.localizedDescription, title: "文件操作", paths: path) }
                     renaming = nil
-                }
-                Button(T("取消"), role: .cancel) { renaming = nil }
-            } message: { Text($0.url.path) }
-            .alert(T("移到废纸篓？"), isPresented: Binding(get: { !deleting.isEmpty }, set: { if !$0 { deleting = [] } })) {
-                Button(T("移到废纸篓"), role: .destructive) {
-                    let targets = deleting.map(\.url); deleting = []
-                    mutate { for target in targets { try FileManager.default.trashItem(at: target, resultingItemURL: nil) } }
-                }
-                Button(T("取消"), role: .cancel) { deleting = [] }
-            } message: { Text(deleting.prefix(6).map { $0.url.path }.joined(separator: "\n")) }
+                },
+                .init(T("取消"), role: .cancel) { renaming = nil }
+            ])
+            .compactAlert(T("移到废纸篓？"), isPresented: Binding(get: { !deleting.isEmpty }, set: { if !$0 { deleting = [] } }),
+                          message: deleting.prefix(6).map { $0.url.path }.joined(separator: "\n") + (deleting.count > 6 ? "\n" + T("另有 %d 项", deleting.count - 6) : ""), actions: [
+                .init(T("移到废纸篓")) {
+                    let targets = deleting.map(\.url), totalSize = deleting.reduce(UInt64(0)) { FileByteCount.adding($0, UInt64(max(0, $1.size))) }; deleting = []
+                    mutate(title: "删除", paths: targets.map(\.path).joined(separator: "\n"), size: totalSize) { for target in targets { try FileManager.default.trashItem(at: target, resultingItemURL: nil) } }
+                },
+                .init(T("取消"), role: .cancel) { deleting = [] }
+            ])
     }
     private func receive(_ providers: [NSItemProvider]) -> Bool {
-        guard ready else { return false }
+        guard ready, providers.allSatisfy({ $0.hasItemConformingToTypeIdentifier(FileDragPayload.type) }) else { return false }
         let directory = URL(fileURLWithPath: path)
         return FileDragPayload.receive(providers) { payload in WorkspaceFileActions.drop(payload, ontoLocal: directory, model: model) }
     }
@@ -153,10 +169,7 @@ struct LocalFiles: View {
                           refresh: { revision += 1 }, parent: { path = (path as NSString).deletingLastPathComponent }, home: { path = FileManager.default.homeDirectoryForCurrentUser.path })
     }
     private var fileTable: some View {
-        let rows = visible.map { item in
-            NativeFileRow(id: item.id, entry: RemoteEntry(name: item.name, path: item.url.path, kind: item.link ? .symbolicLink : item.directory ? .directory : .file, size: UInt64(max(0, item.size)), modified: item.modified), localURL: item.url)
-        }
-        return NativeFileTable(rows: rows, selection: $selected, ready: ready, drop: receive, open: openDirectory, sort: { descriptors in
+        NativeFileTable(rows: tableRows, selection: $selected, ready: ready, drop: receive, open: openDirectory, sort: { descriptors in
             sortOrder = descriptors.map { key, ascending -> KeyPathComparator<LocalEntry> in
                 let order: SortOrder = ascending ? .forward : .reverse
                 switch key { case "size": return KeyPathComparator(\.size, order: order); case "date": return KeyPathComparator(\.modified, order: order); default: return KeyPathComparator(\.name, order: order) }
@@ -171,7 +184,8 @@ struct LocalFiles: View {
         let chosen = items(ids)
         if chosen.isEmpty { directoryActions }
         else {
-            Button(T("打开")) { openDirectory(ids) }.disabled(chosen.count != 1 || chosen.first?.directory != true || !ready)
+            Button(T("打开")) { openDirectory(ids) }.disabled(chosen.count != 1 || !ready)
+            Button(T("拷贝文件路径")) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(chosen.map { $0.url.path }.joined(separator: "\n"), forType: .string) }
             Button(T("上传到远程目录")) { upload(chosen.map(\.url)) }.disabled(!ready || !canUpload || chosen.contains(where: \.link))
             Button(T("复制到…")) { relocate(chosen, copy: true) }.disabled(!ready)
             Button(T("移动到…")) { relocate(chosen, copy: false) }.disabled(!ready)
@@ -182,35 +196,49 @@ struct LocalFiles: View {
     }
     private func load() async {
         guard !Task.isCancelled else { return }
-        busy = true; selected = []; model.localSelection = []; model.localSelectionSupportsTransfer = false
-        loadedPath = nil; entries = []; sortedEntries = []; error = nil
+        let sameDirectory = loadedPath == path
+        busy = true; error = nil
+        if !sameDirectory {
+            clearListing()
+        }
         do {
             let current = path, workspace = model.workspaceKey
             let task = Task.detached(priority: .utility) {
                 try Task.checkCancellation()
-                let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
+                let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
                 return try FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: current), includingPropertiesForKeys: Array(keys)).map { url in
                     try Task.checkCancellation()
-                    let values = try? url.resourceValues(forKeys: keys), link = values?.isSymbolicLink == true
-                    return LocalEntry(url: url, directory: values?.isDirectory == true && !link, link: link, size: Int64(values?.fileSize ?? 0), modified: values?.contentModificationDate ?? .distantPast)
+                    let original = try? url.resourceValues(forKeys: keys), link = original?.isSymbolicLink == true
+                    let values = link ? try? url.resolvingSymlinksInPath().resourceValues(forKeys: keys) : original
+                    let kind: RemoteFileKind? = values?.isDirectory == true ? .directory : values?.isRegularFile == true ? .file : nil
+                    return LocalEntry(url: url, directory: values?.isDirectory == true, link: link, size: Int64(values?.fileSize ?? 0), modified: values?.contentModificationDate ?? .distantPast, targetKind: link ? kind : nil)
                 }
             }
             let loaded = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
             try Task.checkCancellation(); entries = loaded; updateVisible(); loadedPath = current; error = nil; busy = false
+            selected.formIntersection(Set(visible.map(\.id)))
+            let chosen = items(selected); model.localSelection = chosen.map(\.url)
+            model.localSelectionSupportsTransfer = !chosen.isEmpty && chosen.allSatisfy { !$0.link }
             model.rememberLocalPath(current, workspace: workspace)
-        } catch is CancellationError {} catch { guard !Task.isCancelled else { return }; entries = []; self.error = error.localizedDescription; busy = false }
+        } catch is CancellationError {} catch { guard !Task.isCancelled else { return }; clearListing(); self.error = error.localizedDescription; busy = false }
     }
-    private func mutate(_ operation: @escaping @Sendable () throws -> Void) {
+    private func mutate(title: String = "文件操作", paths: String = "", size: UInt64 = 0, _ operation: @escaping @Sendable () throws -> Void) {
         guard ready else { return }
         busy = true; mutating = true; loadedPath = nil; mutationError = nil
         Task {
-            do { try await model.performLocalFileOperation(operation) }
-            catch { mutationError = error.localizedDescription }
+            do { try await model.performLocalFileOperation(title: title, paths: paths, size: size, operation) }
+            catch { mutationError = error.localizedDescription; model.error = error.localizedDescription }
             mutating = false; busy = false; revision += 1
         }
     }
     private func openDirectory(_ identifiers: Set<String>) {
-        if ready, identifiers.count == 1, let entry = entries.first(where: { identifiers.contains($0.id) && $0.directory }) { path = entry.url.path }
+        if ready, identifiers.count == 1, let entry = entries.first(where: { identifiers.contains($0.id) }) {
+            do {
+                let target = try FilePaths.openingTarget(entry.url)
+                if try target.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true { path = target.path }
+                else { model.fileEditor.openLocal(target, model: model) }
+            } catch { model.error = error.localizedDescription }
+        }
     }
     private func chooseDirectory() {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
@@ -231,7 +259,7 @@ struct LocalFiles: View {
         panel.title = T(copy ? "复制到本地目录" : "移动到本地目录")
         guard panel.runModal() == .OK, let directory = panel.url else { return }
         let sources = chosen.map(\.url)
-        mutate { try LocalFileOperations.relocate(sources, into: directory, copy: copy) }
+        mutate(title: copy ? "复制" : "移动", paths: sources.map(\.path).joined(separator: "\n") + " → " + directory.path, size: chosen.reduce(UInt64(0)) { FileByteCount.adding($0, UInt64(max(0, $1.size))) }) { try LocalFileOperations.relocate(sources, into: directory, copy: copy) }
     }
 }
 

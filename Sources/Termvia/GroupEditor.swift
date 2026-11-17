@@ -84,7 +84,7 @@ struct GroupEditorRequest: Identifiable {
                 Button(T(group == nil ? "创建" : "保存")) {
                     do { try model.saveGroup(name: name, appearance: appearance, editing: group); dismiss() }
                     catch { self.error = error.localizedDescription }
-                }.keyboardShortcut(.defaultAction).accessibilityIdentifier("Termvia.GroupAppearance.Save")
+                }.keyboardShortcut(.defaultAction).confirmationButton().accessibilityIdentifier("Termvia.GroupAppearance.Save")
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }.controlSize(.small).padding(20).frame(width: 400)

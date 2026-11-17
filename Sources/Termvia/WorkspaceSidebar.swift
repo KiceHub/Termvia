@@ -92,6 +92,7 @@ struct HostSidebar: View {
                             if let host = model.hosts.first(where: { ids.contains($0.id) }) {
                                 Button(T("连接")) { model.connect(host) }
                                 Button(T("编辑…")) { model.presentHostEditor(host) }
+                                Button(T("复制")) { do { try model.copyHost(host) } catch { model.error = error.localizedDescription } }
                                 Menu(T("主机图标")) {
                                     Button(T("自动")) { model.setHostIcon(nil, host: host) }
                                     ForEach(HostSystemIcon.allCases) { icon in
@@ -115,15 +116,16 @@ struct HostSidebar: View {
             }
         }
         .onChange(of: model.hostSearch) { _, _ in searchCollapsedGroups = [] }
-        .alert(T("删除此主机配置？"), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-            Button(T("删除"), role: .destructive) {
+        .compactAlert(T("删除此主机配置？"), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                      message: deleting.map { $0.name + "\n" + $0.address } ?? "", actions: [
+            .init(T("删除")) {
                 if let host = deleting {
                     do { try model.deleteHost(host) } catch { model.error = error.localizedDescription }
                 }
                 deleting = nil
-            }
-            Button(T("取消"), role: .cancel) { deleting = nil }
-        } message: { Text(T("删除配置后，已打开的终端和传输继续运行；已保存的主机指纹保留。")) }
+            },
+            .init(T("取消"), role: .cancel) { deleting = nil }
+        ])
     }
     private func hostRow(_ host: SSHHost) -> some View {
         SavedHostRow(host: host).padding(.leading, 14).tag(host.id)

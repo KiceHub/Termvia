@@ -9,7 +9,7 @@ import TermviaCore
     var titlebarController: TitlebarController?
     private var terminationPending = false
     private var windowObserver: NSObjectProtocol?
-    private var closeConfirmation: NSAlert?
+    private var closeConfirmation: CompactAlert?
     private var closeObserver: NSObjectProtocol?
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Activation must not depend on the attachment view's first layout:
@@ -24,6 +24,14 @@ import TermviaCore
             }
         }
     }
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        let main = menu.addItem(withTitle: T("主界面"), action: #selector(showWorkspace), keyEquivalent: ""); main.target = self
+        if model?.fileEditor.openDocuments.isEmpty == false { let editor = menu.addItem(withTitle: T("文件编辑器"), action: #selector(showEditor), keyEquivalent: ""); editor.target = self }
+        return menu
+    }
+    @objc private func showWorkspace() { mainWindow?.deminiaturize(nil); mainWindow?.makeKeyAndOrderFront(nil); NSApp.activate() }
+    @objc private func showEditor() { model?.fileEditor.bringToFront() }
     func requestTermination() {
         for window in NSApp.windows { window.preventsApplicationTerminationWhenModal = false }
         if NSApp.modalWindow != nil { NSApp.stopModal(withCode: .cancel) }
@@ -33,9 +41,9 @@ import TermviaCore
     func requestWindowClose() {
         guard let model, let window = mainWindow, !terminationPending, closeConfirmation == nil else { return }
         guard model.busy || model.sessions.count > 1 else { requestTermination(); return }
-        let alert = NSAlert(); closeConfirmation = alert
+        let alert = CompactAlert(); closeConfirmation = alert
         alert.messageText = T("退出 Termvia？")
-        alert.informativeText = T("将关闭所有标签页并取消未完成的传输。")
+        alert.informativeText = T("未保存更改将丢失，传输将取消。")
         alert.addButton(withTitle: T("退出")); alert.addButton(withTitle: T("取消"))
         alert.buttons[0].keyEquivalent = ""; alert.buttons[1].keyEquivalent = "\u{1b}"
         alert.beginSheetModal(for: window) { [weak self] result in
@@ -57,6 +65,11 @@ import TermviaCore
             await model.finishShutdown()
             if ProcessInfo.processInfo.arguments.contains("--launch-check"), ProcessInfo.processInfo.environment["TERMVIA_QUIT_ONLY"] == "1" {
                 guard model.sessions.allSatisfy({ $0.isStartPage || !$0.terminal.process.running }) else { fputs("Quit check: live process after shutdown\n", stderr); exit(1) }
+                if ProcessInfo.processInfo.environment["TERMVIA_QUIT_DIALOG"]?.hasPrefix("file-close") == true {
+                    guard model.fileEditor.openDocuments.isEmpty, model.fileEditor.openPrompts.alert == nil,
+                          (0..<2).allSatisfy({ (try? String(contentsOf: model.root.appendingPathComponent("quit-editor-\($0).txt"), encoding: .utf8)) == "quit original\n" }) else { fputs("Quit check: editor saved or remained open\n", stderr); exit(1) }
+                    print("PASS quit overrides editor close/save sheets and discards all unsaved buffers")
+                }
                 try? FileManager.default.removeItem(at: model.root)
                 print("Termvia termination check passed")
             }
@@ -93,7 +106,10 @@ import TermviaCore
     @MainActor private func checkStartup() async {
         do {
             try await Task.sleep(for: .milliseconds(500))
-            guard delegate.mainWindow?.isVisible == true, model.active?.isStartPage == true else { throw MetricsError.invalid }
+            guard let window = delegate.mainWindow, window.isVisible, window.titlebarAppearsTransparent,
+                  window.titleVisibility == .hidden, window.styleMask.contains(.fullSizeContentView),
+                  model.active?.isStartPage == true else { throw MetricsError.invalid }
+            guard let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent(), ["termvia-askpass", "termvia-proxy", "termvia-wireguard", "termvia-ppk"].allSatisfy({ FileManager.default.isExecutableFile(atPath: executableDirectory.appendingPathComponent($0).path) }) else { throw MetricsError.invalid }
             model.connect(nil)
             for _ in 0..<140 where model.active?.monitor.latest == nil { try await Task.sleep(for: .milliseconds(50)) }
             guard let session = model.active, session.terminal.process.running, session.monitor.latest != nil else { throw MetricsError.invalid }
@@ -109,14 +125,17 @@ import TermviaCore
 #endif
     var body: some Scene {
         Window("Termvia", id: "workspace") {
-            WorkspaceView(model: model)
+            WorkspaceSurface(model: model).ignoresSafeArea()
 
 #if TERMVIA_DIAGNOSTICS
             .background(WindowStartupDrawProbe())
 #endif
 
                 .frame(minWidth: WorkspaceWindowGeometry.minimumContentSize.width, minHeight: WorkspaceWindowGeometry.minimumContentSize.height)
-                .preferredColorScheme(model.preferredColorScheme)
+                // SwiftUI owns this scene's titlebar and otherwise restores its
+                // automatic backdrop after the AppKit toolbar is configured.
+                .toolbar(removing: .title)
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                 .background(WorkspaceWindowAttachment { window in
                     guard delegate.mainWindow !== window else { return }
 #if TERMVIA_DIAGNOSTICS
@@ -195,11 +214,11 @@ import TermviaCore
                 Button(T("新增主机")) { model.showHosts(); model.presentHostEditor() }.appShortcut(.newHost, settings: model.settings)
             }
             CommandMenu(T("会话")) {
-                Button(T("重命名标签页…")) { if let active = model.active { model.presentTabRename(active) } }.appShortcut(.renameTab, settings: model.settings).disabled(model.active == nil)
+                Button(T("重命名标签页…")) { model.performShortcut(.renameTab) }.appShortcut(.renameTab, settings: model.settings).disabled(model.active == nil)
                 Divider()
-                Button(T("关闭当前会话")) { if let active = model.active { model.close(active) } }
+                Button(T("关闭当前会话")) { model.performShortcut(.closeTab) }
                     .disabled(model.active == nil)
-                Button(T("重新连接")) { if let active = model.active { model.reconnect(active) } }
+                Button(T("重新连接")) { model.performShortcut(.reconnect) }
                     .appShortcut(.reconnect, settings: model.settings).disabled(model.active == nil || model.active?.isStartPage == true)
                 Divider()
                 Button(T("上一个会话")) { model.selectNext(-1) }.appShortcut(.previousTab, settings: model.settings)
@@ -222,7 +241,6 @@ import TermviaCore
         Settings {
             SettingsView(model: model)
                 .workspaceEnvironment(model: model)
-                .preferredColorScheme(model.preferredColorScheme)
         }
     }
 }

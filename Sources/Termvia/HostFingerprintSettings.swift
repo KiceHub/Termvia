@@ -29,19 +29,19 @@ struct HostFingerprintSettings: View {
                 if busy { ProgressView().controlSize(.small) }
             }
             .task { await load() }
-            .alert(T("忘记此指纹？"), isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), presenting: pending) { record in
-                Button(T("忘记指纹"), role: .destructive) {
+            .compactAlert(T("忘记此指纹？"), isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
+                          message: pending.map(confirmationMessage) ?? "", actions: [
+                .init(T("忘记指纹")) {
+                    guard let record = pending else { return }
                     Task {
                         busy = true
                         do { try await store.forget(record); await load() }
                         catch { self.error = error.localizedDescription }
                         busy = false
                     }
-                }
-                Button(T("取消"), role: .cancel) {}
-            } message: { record in
-                Text(confirmationMessage(record))
-            }
+                },
+                .init(T("取消"), role: .cancel)
+            ])
             if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
             if loaded && records.isEmpty && error == nil {
                 Text(T("没有已保存的主机指纹")).foregroundStyle(.secondary)
@@ -50,16 +50,20 @@ struct HostFingerprintSettings: View {
                 Text(T("没有匹配的主机指纹")).foregroundStyle(.secondary)
             }
             ForEach(visible) { record in
-                HStack(alignment: .top) {
+                HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(addresses[record.id] ?? (record.isHashed ? T("隐藏的主机地址") : record.hosts))
-                            .textSelection(.enabled).help(record.hosts)
-                        Text(([record.marker, record.keyType].filter { !$0.isEmpty }).joined(separator: " · "))
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text(record.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
+                        HStack(spacing: 6) {
+                            Text(addresses[record.id] ?? (record.isHashed ? T("隐藏的主机地址") : record.hosts))
+                                .lineLimit(1).textSelection(.enabled).help(record.hosts).accessibilityIdentifier("Termvia.Fingerprints.Address")
+                            Text(([record.marker, record.keyType].filter { !$0.isEmpty }).joined(separator: " · "))
+                                .font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 5).padding(.vertical, 2).background(.quaternary, in: Capsule()).fixedSize()
+                                .accessibilityIdentifier("Termvia.Fingerprints.Type")
+                        }
+                        Text(record.fingerprint).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                             .accessibilityIdentifier("Termvia.Fingerprints.Value")
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                    Button(T("忘记指纹…"), role: .destructive) { pending = record }
+                    Button(role: .destructive) { pending = record } label: { Image(systemName: "trash").frame(width: 16, height: 16) }
+                        .buttonStyle(.bordered).controlSize(.small).help(T("忘记指纹…")).accessibilityLabel(T("忘记指纹…"))
                         .disabled(busy).accessibilityIdentifier("Termvia.Fingerprints.Forget")
                 }.padding(.vertical, 3)
             }
@@ -67,7 +71,7 @@ struct HostFingerprintSettings: View {
     }
     private func confirmationMessage(_ record: KnownHostRecord) -> String {
         let address = addresses[record.id] ?? record.hosts
-        let explanation = T("仅移除此条信任记录。下次连接可能需要重新确认指纹；已打开的会话不会中断。")
+        let explanation = T("下次连接可能需重新确认指纹。")
         return "\(address)\n\(record.fingerprint)\n\n\(explanation)"
     }
     private func load() async {

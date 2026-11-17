@@ -1,5 +1,23 @@
 import AppKit
 
+/// Recreate only native toolbar controls when appearance changes. AppKit's
+/// shared glass caches its content tint during transitions; a fresh native
+/// platter uses the new appearance immediately. Keep tab hosting views intact.
+@MainActor final class ToolbarAppearanceRefresh {
+    private var observation: NSKeyValueObservation?
+    init(toolbar: NSToolbar, preserving: Set<NSToolbarItem.Identifier>) {
+        observation = NSApplication.shared.observe(\.effectiveAppearance, options: [.old, .new]) { [weak toolbar] _, change in
+            MainActor.assumeIsolated {
+                guard let toolbar, let old = change.oldValue, let new = change.newValue,
+                      AppAppearance.scheme(for: old) != AppAppearance.scheme(for: new) else { return }
+                let controls = toolbar.items.enumerated().filter { !preserving.contains($0.element.itemIdentifier) }.map { ($0.offset, $0.element.itemIdentifier) }
+                for (index, _) in controls.reversed() { toolbar.removeItem(at: index) }
+                for (index, id) in controls { toolbar.insertItem(withItemIdentifier: id, at: index) }
+            }
+        }
+    }
+}
+
 @MainActor private enum ToolbarControlLayout {
     static let height: CGFloat = 28
     static func constrain(_ button: NSButton) {

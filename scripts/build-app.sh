@@ -9,6 +9,8 @@ sdk_version=$(xcrun --sdk macosx --show-sdk-version)
 }
 swift build --arch arm64 -c release --product Termvia
 swift build --arch arm64 -c release --product termvia-askpass
+swift build --arch arm64 -c release --product termvia-proxy
+bash scripts/build-wireguard.sh
 bash scripts/build-ppk.sh
 bin_dir=$(swift build --arch arm64 -c release --show-bin-path)
 app_dir="$PWD/build/Termvia.app"
@@ -17,6 +19,12 @@ rm -rf "$app_dir"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$bin_dir/Termvia" "$app_dir/Contents/MacOS/Termvia"
 install -m 755 "$bin_dir/termvia-askpass" "$app_dir/Contents/MacOS/termvia-askpass"
+install -m 755 .build/termvia-wireguard "$app_dir/Contents/MacOS/termvia-wireguard"
+codesign --force --sign - "$app_dir/Contents/MacOS/termvia-wireguard"
+cp -R .build/wireguard-licenses "$app_dir/Contents/Resources/WireGuard-Licenses"
+install -m 755 "$bin_dir/termvia-proxy" "$app_dir/Contents/MacOS/termvia-proxy"
+strip -S "$app_dir/Contents/MacOS/termvia-proxy"
+codesign --force --sign - "$app_dir/Contents/MacOS/termvia-proxy"
 # Remove debug symbols and their absolute local build paths before signing.
 strip -S "$app_dir/Contents/MacOS/Termvia" "$app_dir/Contents/MacOS/termvia-askpass"
 codesign --force --sign - "$app_dir/Contents/MacOS/termvia-askpass"

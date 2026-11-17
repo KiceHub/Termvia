@@ -28,3 +28,8 @@
 
 .DS_Store
 __pycache__/
+
+!/WireGuardTransport/
+!/scripts/build-wireguard.sh
+
+/WireGuardTransport/*_test.go

@@ -20,6 +20,7 @@ public final class SSHFileClient: Sendable {
         }
         func script(_ operation: SFTPOperation) throws -> String {
             switch operation {
+            case .uploadFile, .downloadFile: throw SSHError.invalid("请选择普通文件；目录和符号链接不自动跟随")
             case .batch(let operations): return try operations.map(script).joined(separator: "\n")
             case .makeDirectory(let path): return "mkdir \(try absolute(path)) || exit 1"
             case .makeFile(let path): return "(umask 077; set -C; : > \(try absolute(path))) || exit 1"
@@ -68,14 +69,17 @@ public final class SSHFileClient: Sendable {
       [ -e "$entry" ] || [ -L "$entry" ] || continue
       count=$((count + 1))
       [ "$count" -le 100000 ] || exit 1
-      if [ -L "$entry" ]; then kind=symbolicLink
+      if [ -L "$entry" ]; then
+        if [ -d "$entry" ]; then kind=symbolicLink:directory
+        elif [ -f "$entry" ]; then kind=symbolicLink:file
+        else kind=symbolicLink; fi
       elif [ -d "$entry" ]; then kind=directory
       elif [ -f "$entry" ]; then kind=file
       else kind=other; fi
       if [ "$platform" = Darwin ]; then
-        metadata=$(stat -f '%z %m' "$entry" 2>/dev/null) || metadata='- -'
+        metadata=$(stat -L -f '%z %m' "$entry" 2>/dev/null) || metadata='- -'
       else
-        metadata=$(stat -c '%s %Y' -- "$entry" 2>/dev/null) || metadata='- -'
+        metadata=$(stat -L -c '%s %Y' -- "$entry" 2>/dev/null) || metadata='- -'
       fi
       printf '%s\000%s\000%s\000' "${entry#./}" "$kind" "$metadata"
     done
@@ -83,6 +87,9 @@ public final class SSHFileClient: Sendable {
     """#
 
     public func perform(_ invocation: Invocation) async throws -> RemoteDirectory {
+        try decode(await capture(invocation))
+    }
+    private func capture(_ invocation: Invocation) async throws -> Data {
         let runner = ProcessRunner(), capture = Capture()
         let timeout = DispatchWorkItem { [weak capture, weak runner] in capture?.expire(); runner?.cancel() }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeout)
@@ -100,7 +107,7 @@ public final class SSHFileClient: Sendable {
         }
         try Task.checkCancellation()
         guard result.status == 0 else { throw SSHError.failed(result.status, result.output) }
-        return try decode(capture.data)
+        return capture.data
     }
 
     public func decode(_ data: Data) throws -> RemoteDirectory {
@@ -118,15 +125,63 @@ public final class SSHFileClient: Sendable {
         for index in stride(from: 1, to: fields.count - 2, by: 3) {
             guard let name = String(data: fields[index], encoding: .utf8),
                   names.insert(Data(fields[index])).inserted,
-                  let kindText = String(data: fields[index + 1], encoding: .utf8), let kind = RemoteFileKind(rawValue: kindText),
+                  let kindText = String(data: fields[index + 1], encoding: .utf8),
                   let metadata = String(data: fields[index + 2], encoding: .utf8) else { throw malformed() }
             let parts = metadata.split(separator: " ")
+            let kinds = kindText.split(separator: ":", omittingEmptySubsequences: false)
+            guard (1...2).contains(kinds.count), let kind = RemoteFileKind(rawValue: String(kinds[0])),
+                  kinds.count == 1 || (kind == .symbolicLink && ["file", "directory"].contains(String(kinds[1]))) else { throw malformed() }
+            let targetKind = kinds.count == 2 ? RemoteFileKind(rawValue: String(kinds[1])) : nil
             guard parts.count == 2 else { throw malformed() }
             let size = UInt64(parts[0]), seconds = TimeInterval(parts[1])
             guard (size != nil || parts[0] == "-"), (seconds?.isFinite == true || parts[1] == "-") else { throw malformed() }
-            entries.append(RemoteEntry(name: name, path: try FilePaths.child(name, in: path), kind: kind, size: size, modified: seconds.map { Date(timeIntervalSince1970: $0) }))
+            entries.append(RemoteEntry(name: name, path: try FilePaths.child(name, in: path), kind: kind, size: size, modified: seconds.map { Date(timeIntervalSince1970: $0) }, linkTargetKind: targetKind))
         }
         return RemoteDirectory(path: path, entries: entries)
+    }
+
+    public static func resolveCommand(_ path: String) throws -> String {
+        guard path.hasPrefix("/"), !path.contains("\0") else { throw SSHError.invalid("本地和远程路径必须是绝对路径") }
+        let script = """
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
+        p=\(SSHRoute.shellQuote(path)); count=0
+        while [ -L "$p" ]; do
+          [ "$count" -lt 40 ] || exit 1
+          target=$(readlink -n "$p" && printf '.') || exit 1
+          target=${target%.}
+          case "$target" in /*) p=$target ;; *) p=${p%/*}/$target ;; esac
+          count=$((count + 1))
+        done
+        if [ -d "$p" ]; then
+          cd -P "$p" || exit 1; kind=directory
+          canonical=$(pwd -P && printf '.') || exit 1
+          canonical=${canonical%.}; canonical=${canonical%?}
+        elif [ -f "$p" ]; then
+          name=${p##*/}; cd -P "${p%/*}/" || exit 1; kind=file
+          parent=$(pwd -P && printf '.') || exit 1
+          parent=${parent%.}; parent=${parent%?}
+          canonical=${parent%/}/$name
+        else exit 1; fi
+        case "$(uname -s)" in
+          Darwin) metadata=$(stat -L -f '%z %m' "$canonical") || exit 1 ;;
+          Linux) metadata=$(stat -L -c '%s %Y' -- "$canonical") || exit 1 ;;
+          *) exit 1 ;;
+        esac
+        printf 'termvia-open-v1\\000%s\\000%s\\000%s\\000' "$canonical" "$kind" "$metadata"
+        """
+        return "LC_ALL=C sh -c " + SSHRoute.shellQuote(script)
+    }
+    public func resolveEntry(_ invocation: Invocation) async throws -> RemoteEntry {
+        let data = try await capture(invocation), marker = Data("termvia-open-v1\0".utf8)
+        guard data.count <= 65536, let start = data.range(of: marker) else { throw SFTPFailure.malformed }
+        let fields = data[start.upperBound...].split(separator: 0, omittingEmptySubsequences: false)
+        guard fields.count == 4, fields[3].isEmpty,
+              let path = String(data: fields[0], encoding: .utf8), path.hasPrefix("/"),
+              let text = String(data: fields[1], encoding: .utf8), let kind = RemoteFileKind(rawValue: text), kind == .file || kind == .directory,
+              let metadata = String(data: fields[2], encoding: .utf8) else { throw SFTPFailure.malformed }
+        let parts = metadata.split(separator: " ")
+        guard parts.count == 2, let size = UInt64(parts[0]), let seconds = TimeInterval(parts[1]), seconds.isFinite else { throw SFTPFailure.malformed }
+        return RemoteEntry(name: (path as NSString).lastPathComponent, path: path, kind: kind, size: size, modified: Date(timeIntervalSince1970: seconds))
     }
 
     private final class Capture: @unchecked Sendable {

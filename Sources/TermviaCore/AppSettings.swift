@@ -55,6 +55,10 @@ public struct TerminalPalette: Codable, Equatable, Sendable {
 }
 
 public struct AppSettings: Codable, Equatable, Sendable {
+    public var remoteFilesOnLeft = true
+    public var proxies: [SSHProxy] = []
+    public var useBuiltInEditor = true
+    public var externalEditorPath = ""
     public var terminalTheme = TerminalTheme.system
     public var preferRemoteColors = true
     public var customPalette = TerminalPalette()
@@ -74,9 +78,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var reconnectDelay = 2.0
     public var reconnectAttempts = 3
     public init() {}
-    private enum CodingKeys: CodingKey { case terminalTheme, preferRemoteColors, customPalette, scrollbackLines, cursorShape, monitorInterval, leftMouseAction, rightMouseAction, rightClickClipboard, leftClickCopyRightClickPaste, doubleClickClosesTab, terminalInsets, shortcutOverrides, sshKeepAlive, sshKeepAliveInterval, autoReconnect, confirmTransfers, suppressOpenSSHWarnings, reconnectDelay, reconnectAttempts }
+    private enum CodingKeys: CodingKey { case remoteFilesOnLeft, proxies, useBuiltInEditor, externalEditorPath, terminalTheme, preferRemoteColors, customPalette, scrollbackLines, cursorShape, monitorInterval, leftMouseAction, rightMouseAction, rightClickClipboard, leftClickCopyRightClickPaste, doubleClickClosesTab, terminalInsets, shortcutOverrides, sshKeepAlive, sshKeepAliveInterval, autoReconnect, confirmTransfers, suppressOpenSSHWarnings, reconnectDelay, reconnectAttempts }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        remoteFilesOnLeft = try values.decodeIfPresent(Bool.self, forKey: .remoteFilesOnLeft) ?? true
+        proxies = try values.decodeIfPresent([SSHProxy].self, forKey: .proxies) ?? []
+        useBuiltInEditor = try values.decodeIfPresent(Bool.self, forKey: .useBuiltInEditor) ?? true
+        externalEditorPath = try values.decodeIfPresent(String.self, forKey: .externalEditorPath) ?? ""
         terminalTheme = (try values.decodeIfPresent(String.self, forKey: .terminalTheme)).flatMap(TerminalTheme.init(rawValue:)) ?? .system
         preferRemoteColors = try values.decodeIfPresent(Bool.self, forKey: .preferRemoteColors) ?? true
         customPalette = try values.decodeIfPresent(TerminalPalette.self, forKey: .customPalette) ?? TerminalPalette()
@@ -100,6 +108,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     }
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(remoteFilesOnLeft, forKey: .remoteFilesOnLeft)
+        try values.encode(proxies, forKey: .proxies)
+        try values.encode(useBuiltInEditor, forKey: .useBuiltInEditor)
+        try values.encode(externalEditorPath, forKey: .externalEditorPath)
         try values.encode(terminalTheme, forKey: .terminalTheme)
         try values.encode(preferRemoteColors, forKey: .preferRemoteColors)
         try values.encode(customPalette, forKey: .customPalette)

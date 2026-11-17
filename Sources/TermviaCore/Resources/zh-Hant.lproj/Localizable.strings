@@ -47,7 +47,6 @@
 "删除" = "刪除";
 "删除…" = "刪除…";
 "删除此主机配置？" = "刪除此主機設定？";
-"删除配置后，已打开的终端和传输继续运行；已保存的主机指纹保留。" = "刪除設定後，已開啟的終端機和傳輸繼續執行；已儲存的主機指紋保留。";
 "刷新目录" = "刷新目錄";
 "剪切" = "剪下";
 "协议" = "協議";
@@ -225,7 +224,6 @@
 "SFTP 返回了无效数据" = "SFTP 回傳了無效資料";
 "SFTP 连接已关闭：%@" = "SFTP 連線已關閉：%@";
 "SFTP 错误 %d：%@" = "SFTP 錯誤 %d：%@";
-"下次连接必须重新核对并确认指纹。已打开的会话不会中断；同一地址的配置共用此信任记录。" = "下次連線必須重新核對並確認指紋。已開啟的工作階段不會中斷；同一地址的設定共用此信任記錄。";
 "主机指纹" = "主機指紋";
 "主机指纹…" = "主機指紋…";
 "仅删除空文件夹，不递归删除；远程删除无法撤销。" = "僅刪除空資料夾，不遞歸刪除；遠端刪除無法還原。";
@@ -376,8 +374,6 @@
 "下载暂存结果类型不匹配" = "下載暫存結果類型不匹配";
 "文件夹已存在：%@" = "資料夾已存在：%@";
 "合并" = "合併";
-"合并会保留目标独有内容；同名文件仍逐项询问是否覆盖。" = "合併會保留目標獨有內容；同名檔案仍逐項詢問是否覆寫。";
-"是否覆盖目标中的同名文件？" = "是否覆寫目標中的同名檔案？";
 "目标类型不同或为符号链接：%@" = "目標類型不同或為符號連結：%@";
 "已跳过" = "已跳過";
 "已跳过 %d 项" = "已跳過 %d 項";
@@ -388,7 +384,6 @@
 "来源" = "來源";
 "目标" = "目標";
 "无效的删除路径" = "無效的刪除路徑";
-"将关闭所有标签页并取消未完成的传输。" = "將關閉所有標籤頁並取消未完成的傳輸。";
 "主机名称已存在" = "主機名稱已存在";
 "分组名称为空或已存在" = "群組名稱為空或已存在";
 "新建分组…" = "新增群組…";
@@ -537,8 +532,133 @@
 "隐藏的主机地址" = "隱藏的主機位址";
 "包括已删除主机的信任记录；删除主机配置不会清除此列表。" = "包括已刪除主機的信任記錄；刪除主機設定不會清除此列表。";
 "忘记此指纹？" = "忘記此指紋？";
-"仅移除此条信任记录。下次连接可能需要重新确认指纹；已打开的会话不会中断。" = "僅移除此筆信任記錄。下次連線可能需要重新確認指紋；已開啟的工作階段不會中斷。";
 
 "SSH 保活" = "SSH 保活";
 "保活间隔" = "保活間隔";
 "应用于新建或重新建立的 SSH 连接；连续 3 次未响应则断开。" = "套用至新建或重新建立的 SSH 連線；連續 3 次未回應則中斷。";
+
+// Version 0.2.0
+"文件编辑器" = "File Editor";
+"使用内置编辑器" = "Use built-in editor";
+"系统默认应用" = "System default app";
+"选择应用…" = "Choose App…";
+"重置" = "Reset";
+"跳板机连接已结束" = "Jump host connection ended";
+"代理服务器" = "Proxy Servers";
+"请先解除主机对该代理的引用" = "Remove host references to this proxy first";
+"添加代理…" = "Add Proxy…";
+"类型" = "Type";
+"无法打开文件" = "Unable to open file";
+"保存并同步" = "Save and Sync";
+"关闭文件" = "Close File";
+"内置编辑器仅支持 UTF-8 文本，请使用外置应用" = "The built-in editor supports UTF-8 text. Use an external app for this file.";
+"拷贝文件路径" = "Copy File Path";
+"%@：%@" = "%@: %@";
+"选择主机…" = "Choose Host…";
+"关闭当前终端" = "Close Current Terminal";
+"直连" = "Direct";
+"跳板机" = "Jump Host";
+"上游连接" = "Upstream";
+"左右拆分" = "Split Left and Right";
+"上下拆分" = "Split Above and Below";
+"文件操作" = "File Operation";
+"移动/重命名" = "Move / Rename";
+"请检查代理名称、地址、端口和用户名" = "Check the proxy name, address, port and username";
+"跳板机链存在循环" = "The jump host chain contains a cycle";
+"找不到上游跳板机" = "Upstream jump host not found";
+"找不到代理服务器" = "Proxy server not found";
+"无法保存代理配置" = "Unable to save proxy configuration";
+"代理辅助程序缺失，请重新构建应用" = "Proxy helper is missing. Rebuild the app.";
+"跳板机连接超时" = "Jump host connection timed out";
+"请先解除主机对该跳板机的引用" = "Remove host references to this jump host first";
+"代理密码过长" = "Proxy password is too long";
+"代理名称已存在" = "A proxy with this name already exists";
+"移动" = "Move";
+
+// Version 0.2.1
+"代理" = "Proxies";
+"搜索代理" = "Search proxies";
+"备注" = "Note";
+"无" = "None";
+"对端 IP" = "Endpoint IP";
+"Peer 公钥" = "Peer Public Key";
+"本机公钥" = "Local Public Key";
+"本机 IP" = "Local IP";
+"预共享密钥" = "Preshared Key";
+"生成" = "Generate";
+"请选择代理服务器" = "Choose a proxy server";
+"请检查 WireGuard 公钥、本机 IP 和 MTU" = "Check the WireGuard public key, local IP and MTU";
+"WireGuard 密钥必须为 Base64 编码的 32 字节密钥" = "WireGuard keys must be Base64-encoded 32-byte keys";
+"WireGuard 连接已结束" = "WireGuard connection ended";
+"WireGuard 启动超时" = "WireGuard startup timed out";
+"远程文件显示在左侧" = "Show remote files on the left";
+"主界面" = "Main Window";
+"窗口拆分" = "Split Window";
+"本主机" = "Current Host";
+"上下" = "Above and Below";
+"左右" = "Left and Right";
+"关闭其他文件" = "Close Other Files";
+"关闭全部文件" = "Close All Files";
+"缩小文本" = "Decrease Text Size";
+"放大文本" = "Increase Text Size";
+"行/列" = "Line/Column";
+"编码" = "Encoding";
+"换行符" = "Line Ending";
+"语法高亮" = "Syntax";
+"自动识别" = "Automatic";
+"纯文本" = "Plain Text";
+"自定义…" = "Custom…";
+"自定义高亮规则" = "Custom Highlight Pattern";
+"当前编码无法无损保存此文本" = "This text cannot be saved losslessly with the selected encoding";
+"无法使用所选编码打开文件" = "Unable to decode the file with the selected encoding";
+"暂停" = "Pause";
+
+"%@ 副本" = "%@ 副本";
+
+"查看私钥" = "檢視私鑰";
+
+"隐藏私钥" = "隱藏私鑰";
+
+"继续打开" = "繼續開啟";
+
+"无法检查文件格式" = "無法檢查檔案格式";
+
+"未知" = "未知";
+
+"刷新将重新读取文件内容，未同步的更改将丢失。" = "重新整理將重新讀取檔案內容，未同步的變更將遺失。";
+
+"是否放弃更改并刷新文件？" = "是否放棄變更並重新整理檔案？";
+
+"放弃更改并刷新" = "放棄變更並重新整理";
+
+"刷新前是否保存文件？" = "重新整理前是否儲存檔案？";
+
+
+
+"关闭前是否保存文件？" = "關閉前是否儲存檔案？";
+
+"不保存" = "不儲存";
+
+"全部关闭" = "全部關閉";
+
+"是否全部关闭？" = "是否全部關閉？";
+
+"打开大文件？" = "開啟大檔案？";
+
+"无法编辑此文件" = "無法編輯此檔案";
+
+"文件大小：%@" = "檔案大小：%@";
+
+"仅支持文本文件" = "僅支援文字檔案";
+
+"非文本文件" = "非文字檔案";
+
+"仅支持 16 MB 以内的文件" = "僅支援 16 MB 以內的檔案";
+
+"同名文件另行确认覆盖。" = "同名檔案另行確認覆寫。";
+
+"下次连接可能需重新确认指纹。" = "下次連線可能需重新確認指紋。";
+
+"未保存更改将丢失，传输将取消。" = "未儲存變更將遺失，傳輸將取消。";
+
+"另有 %d 项" = "另有 %d 項";

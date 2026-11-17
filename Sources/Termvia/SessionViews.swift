@@ -15,7 +15,7 @@ struct SessionTerminalPane: View {
                     VStack(spacing: 10) {
                         ProgressView().progressViewStyle(.circular).controlSize(.regular)
                         Text(T("正在连接")).font(.callout)
-                    }.padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }.padding(20).glassEffect(.regular, in: .rect(cornerRadius: 20))
                         .accessibilityElement(children: .combine).accessibilityLabel(T("正在连接"))
 
 #if TERMVIA_DIAGNOSTICS
@@ -33,48 +33,48 @@ struct SessionTab: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appearsActive) private var appearsActive
     @ObservedObject var session: Session
+    @ObservedObject private var state: Session
     let selected: Bool
     let select: () -> Void
     let close: () -> Void
     var reconnect: (() -> Void)? = nil
     var rename: (() -> Void)? = nil
+    var splitActions: [NativeSessionTab.Action] = []
     var hostIcon: String? = nil
     var doubleClickCloses = true
+    init(session: Session, selected: Bool, select: @escaping () -> Void, close: @escaping () -> Void, reconnect: (() -> Void)? = nil, rename: (() -> Void)? = nil, splitActions: [NativeSessionTab.Action] = [], hostIcon: String? = nil, doubleClickCloses: Bool = true, statusSession: Session? = nil) {
+        self.session = session; self.state = statusSession ?? session; self.selected = selected; self.select = select; self.close = close
+        self.reconnect = reconnect; self.rename = rename; self.splitActions = splitActions; self.hostIcon = hostIcon; self.doubleClickCloses = doubleClickCloses
+    }
     @State private var hovered = false
+    var displayTitle: String { session.customTabTitle ?? state.tabTitle }
     var body: some View {
         NativeSessionTab(content: AnyView(content.environment(\.locale, uiLocale).environment(\.colorScheme, colorScheme).environment(\.appearsActive, appearsActive)), actions: menuActions, onDoubleClick: doubleClickCloses ? close : nil, identifier: "Termvia.TabContainer.\(session.id)")
             .frame(height: 30).onHover { hovered = $0 }
     }
     private var content: some View {
-        HStack(spacing: 8) {
-            Button(action: select) {
-                HStack(spacing: 6) {
-                    if session.phase == .connecting { ProgressView().progressViewStyle(.circular).controlSize(.mini).accessibilityLabel(T("正在连接")) }
-                    else if session.isStartPage { Image(systemName: "house") }
-                    else if session.host != nil && session.isDisconnected {
-                        BrokenLinkSymbol().foregroundStyle(.secondary)
-                            .accessibilityIdentifier("Termvia.Tab.Disconnected.\(session.id)").accessibilityLabel(T("已断开"))
-                    }
-                    else if session.connected, session.host != nil {
-                        HostIcon(icon: hostIcon ?? session.host?.customIcon ?? session.host?.detectedSystem ?? "server")
-                            .scaleEffect(0.8).frame(width: 14, height: 14)
+        CompactTabContent(title: displayTitle, selected: selected, hovered: hovered, select: select, close: close,
+                          closeLabel: T("关闭 %@", session.tabTitle), identifier: "Termvia.Tab.\(session.id)", closeIdentifier: "Termvia.Tab.Close.\(session.id)",
+                          status: state.status, help: "\(session.tabTitle) · \(state.status) · \(state.dimensions)") {
+            if state.phase == .connecting { ProgressView().progressViewStyle(.circular).controlSize(.mini).accessibilityLabel(T("正在连接")) }
+            else if session.isStartPage { Image(systemName: "house") }
+            else if state.host != nil && state.isDisconnected {
+                BrokenLinkSymbol().foregroundStyle(.secondary)
+                    .accessibilityIdentifier("Termvia.Tab.Disconnected.\(session.id)").accessibilityLabel(T("已断开"))
+            }
+            else if state.connected, state.host != nil {
+                HostIcon(icon: hostIcon ?? state.host?.customIcon ?? state.host?.detectedSystem ?? "server")
+                    .scaleEffect(0.8).frame(width: 14, height: 14)
 
 #if TERMVIA_DIAGNOSTICS
-                            .background(GeometryCheckProbe(role: "tab-host-icon-\(session.id)"))
+                    .background(GeometryCheckProbe(role: "tab-host-icon-\(session.id)"))
 #endif
 
-                    }
-                    Text(session.tabTitle).lineLimit(1)
-                }.frame(minWidth: 20, maxHeight: .infinity).contentShape(Rectangle())
-            }.buttonStyle(.plain).help("\(session.tabTitle) · \(session.status) · \(session.dimensions)")
-                .accessibilityIdentifier("Termvia.Tab.\(session.id)")
-                .accessibilityAddTraits(selected ? [.isSelected] : []).accessibilityValue(session.status)
-            Button(action: close) { Image(systemName: "xmark").font(.caption2).frame(width: 20, height: 20).contentShape(Rectangle()) }
-                .buttonStyle(.plain).help(T("关闭 %@", session.tabTitle)).accessibilityLabel(T("关闭 %@", session.tabTitle))
-        }.font(.system(size: 12, weight: selected ? .medium : .regular)).padding(.horizontal, 10).frame(height: 30)
-            .modifier(SessionCapsule(selected: selected, hovered: hovered))
+            }
+            else { Image(systemName: "terminal") }
+        }
     }
-    private var menuActions: [NativeSessionTab.Action] {
+    var menuActions: [NativeSessionTab.Action] {
         var actions: [NativeSessionTab.Action] = []
         if let rename {
             actions.append(.init(T("重命名"), action: rename))
@@ -82,9 +82,10 @@ struct SessionTab: View {
             actions.append(.separator)
         }
         if !session.isStartPage {
-            actions.append(.init(T("停止"), enabled: session.phase.isActive || session.reconnectPending) { session.stop() })
-            if let reconnect { actions.append(.init(T("重新连接"), enabled: !session.restarting, action: reconnect)) }
+            actions.append(.init(T("停止"), enabled: state.phase.isActive || state.reconnectPending) { state.stop() })
+            if let reconnect { actions.append(.init(T("重新连接"), enabled: !state.restarting, action: reconnect)) }
         }
+        actions += splitActions
         actions.append(.init(T("关闭标签页"), action: close))
         return actions
     }

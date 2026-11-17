@@ -7,8 +7,8 @@
 <key>CFBundleIconFile</key><string>Termvia</string>
 <key>CFBundleIconName</key><string>Termvia</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.1</string>
-<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleShortVersionString</key><string>0.2.2</string>
+<key>CFBundleVersion</key><string>5</string>
 <key>TermviaAuthor</key><string>Mr.K</string>
 <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Mr.K.</string>
 <key>TermviaLicense</key><string>Apache-2.0</string>

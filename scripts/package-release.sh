@@ -9,7 +9,7 @@ version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_d
 if [ -n "${RELEASE_TAG:-}" ] && [ "$RELEASE_TAG" != "v$version" ]; then
     echo "Release tag must match the app version: v$version" >&2; exit 1
 fi
-for executable in Termvia termvia-askpass termvia-ppk; do
+for executable in Termvia termvia-askpass termvia-ppk termvia-proxy termvia-wireguard; do
     [ "$(lipo -archs "$app_dir/Contents/MacOS/$executable")" = arm64 ] || {
         echo "Unexpected architecture: $executable" >&2; exit 1;
     }

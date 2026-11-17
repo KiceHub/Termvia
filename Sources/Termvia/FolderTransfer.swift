@@ -2,6 +2,13 @@ import Foundation
 import TermviaCore
 
 extension AppModel {
+    func confirmDownloadOverwrite(_ transfer: Transfer) async throws -> Bool {
+        guard !transfer.upload, transfer.askConflicts,
+              let kind = try LocalDirectoryMerge.kind(at: URL(fileURLWithPath: transfer.local)) else { return transfer.overwrite }
+        guard kind == .file else { throw SSHError.invalid(T("目标类型不同或为符号链接：%@", transfer.local)) }
+        guard try await approveConflict(transfer, path: transfer.local, directory: false) else { throw TransferSkipped() }
+        return true
+    }
     private func approveConflict(_ transfer: Transfer, path: String, directory: Bool) async throws -> Bool {
         guard transfer.askConflicts else { throw SSHError.invalid(T("文件已存在：%@", (path as NSString).lastPathComponent)) }
         switch try await fileConflict(path: path, directory: directory, scope: transfer.id) {
@@ -17,7 +24,7 @@ extension AppModel {
             guard entry.kind == .file else { throw SSHError.invalid(T("目标类型不同或为符号链接：%@", transfer.remote)) }
             guard try await approveConflict(transfer, path: transfer.host.name + ":" + transfer.remote, directory: false) else { throw TransferSkipped() }
         }
-        try await connection.run(commands.transfer(connection.host, local: transfer.local, remote: transfer.remote, upload: true, method: transfer.method))
+        try await connection.file(local: transfer.local, remote: transfer.remote, upload: true)
         return 0
     }
     func transferFolder(_ transfer: Transfer) async throws -> Int {
@@ -26,10 +33,12 @@ extension AppModel {
         if transfer.upload {
             let scan = Task.detached(priority: .utility) { try TransferTree.local(local) }
             let tree = try await withTaskCancellationHandler(operation: { try await scan.value }, onCancel: { scan.cancel() })
+            transfer.control.setTotal(tree.totalBytes)
             for path in tree.files { _ = try commands.transfer(connection.host, local: local.appendingPathComponent(path).path, remote: transfer.remote + "/" + path, upload: true, method: transfer.method) }
             return try await uploadFolder(transfer, tree: tree, connection: connection, local: local)
         }
         let tree = try await TransferTree.remote(transfer.remote) { path in try await connection.directory(path) }
+        transfer.control.setTotal(tree.totalBytes)
         if let kind = try LocalDirectoryMerge.kind(at: local) {
             guard kind == .directory else { throw SSHError.invalid(T("目标类型不同或为符号链接：%@", local.path)) }
             if !transfer.overwrite {
@@ -153,10 +162,7 @@ extension AppModel {
                 let target = try merge.downloadTarget(path)
                 stages.append((path, target, try DownloadStaging(target: target, overwrite: overwrite), overwrite))
             }
-            let invocations = try stages.map { path, _, stage, _ in try commands.transfer(connection.host, local: stage.fileURL.path, remote: transfer.remote + "/" + path, upload: false, method: transfer.method) }
-            if transfer.method == .sftp, var batch = invocations.first {
-                batch.input = invocations.reduce(into: Data()) { $0.append($1.input ?? Data()) }; try await connection.run(batch)
-            } else { for invocation in invocations { try await connection.run(invocation) } }
+            try await connection.fileBatch(stages.map { (path, _, stage, _) in (stage.fileURL.path, transfer.remote + "/" + path) })
             for (path, target, stage, previous) in stages {
                 try Task.checkCancellation(); try merge.validate(path, target: target)
                 var overwrite = previous

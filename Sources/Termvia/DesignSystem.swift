@@ -3,8 +3,9 @@ import AppKit
 import SwiftUI
 
 enum AppTheme {
+    static let nativeSurface = NSColor.controlBackgroundColor
     static let background = Color(nsColor: .windowBackgroundColor)
-    static let surface = Color(nsColor: .controlBackgroundColor)
+    static let surface = Color(nsColor: nativeSurface)
     static let elevated = Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
     static let border = Color(nsColor: .separatorColor)
     static let accent = Color.accentColor
@@ -105,5 +106,12 @@ struct TerminalWelcome: View {
 #else
         EmptyView()
 #endif
+    }
+}
+
+/// Use the native prominent style for an explicitly chosen confirmation.
+extension View {
+    func confirmationButton() -> some View {
+        buttonStyle(.borderedProminent).tint(Color(nsColor: .systemBlue))
     }
 }

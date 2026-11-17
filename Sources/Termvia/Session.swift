@@ -26,6 +26,7 @@ enum SessionPhase: Equatable {
     private(set) var invocation: Invocation
     private(set) var authentication: AuthenticationContext?
     let activity: TabActivity
+    var routeConnection: SSHRouteConnection?
     var connectionSecurity: SSHConnectionSecurity?
     let monitor = RemoteMonitor()
     var sidebarVisible = true
@@ -132,6 +133,9 @@ enum SessionPhase: Equatable {
             phase = .failed(error.localizedDescription); announceDisconnect(); onExit?(self)
         }
     }
+    func installTransport(host: SSHHost, authentication: AuthenticationContext, commands: SSHCommands) throws {
+        self.host = host; self.authentication = authentication; invocation = try commands.terminal(host)
+    }
     func connectionPrepared() {
         guard phase == .connecting else { return }
         prepared = true; connected = true; connectedAt = .now; phase = .ready; start()
@@ -148,6 +152,7 @@ enum SessionPhase: Equatable {
     }
     private func disconnectAuxiliary() {
         connected = false
+        routeConnection?.close(); routeConnection = nil
         remoteDirectory = nil; remoteSelection = []; listingError = nil
         disconnectingTasks += [connectionJob, listingJob].compactMap { $0 }
         connectionJob?.cancel(); cancelListing(); monitor.stop()

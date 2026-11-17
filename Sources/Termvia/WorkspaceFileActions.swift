@@ -17,15 +17,15 @@ import TermviaCore
                 let folder = values.isDirectory == true
                 let remote = try FilePaths.child(file.lastPathComponent, in: directory)
                 model.enqueue(local: file.path, remote: remote, upload: true, method: model.fileProtocol(for: session), host: host, authentication: session.authentication, directory: folder, askConflicts: true, activity: session.activity)
-            } catch { model.error = error.localizedDescription; return }
+            } catch { model.recordFileFailure(error.localizedDescription, title: "上传", host: host, paths: file.path + " → " + directory, activity: session.activity); return }
         }
     }
-    static func download(_ entries: [RemoteEntry], model: AppModel, session: Session, directory: URL) {
+    static func download(_ entries: [RemoteEntry], model: AppModel, session: Session, directory: URL, confirmed: Bool = false) {
         guard session.connected, session.host != nil else { model.error = T("请先打开远程会话"); return }
         guard entries.allSatisfy({ $0.kind == .file || $0.kind == .directory }) else { model.error = T("请选择文件或文件夹，不支持符号链接"); return }
-        model.confirmTransfer(sources: entries.map { (session.host?.name ?? "") + ":" + $0.path }, destination: directory.path, upload: false) {
-            model.planFileTransfer(activity: session.activity) { scope in try await downloadConfirmed(entries, model: model, session: session, directory: directory, scope: scope) }
-        }
+        let perform = { model.planFileTransfer(activity: session.activity) { scope in try await downloadConfirmed(entries, model: model, session: session, directory: directory, scope: scope) } }
+        if confirmed { perform() }
+        else { model.confirmTransfer(sources: entries.map { (session.host?.name ?? "") + ":" + $0.path }, destination: directory.path, upload: false, perform: perform) }
     }
     private static func downloadConfirmed(_ entries: [RemoteEntry], model: AppModel, session: Session, directory: URL, scope: UUID) async throws {
         var planned = Set<String>()
@@ -38,7 +38,7 @@ import TermviaCore
             while true {
                 let kind = try LocalDirectoryMerge.kind(at: target)
                 if let kind, kind != entry.kind { throw SSHError.invalid(T("目标类型不同或为符号链接：%@", target.path)) }
-                let exists = kind != nil || planned.contains(key(target)) || model.transfers.contains { ["排队中", "传输中", "正在取消"].contains($0.state) && $0.destinationKey == key(target) }
+                let exists = kind != nil || planned.contains(key(target)) || model.transfers.contains { ["排队中", "传输中", "正在取消", "已暂停"].contains($0.state) && $0.destinationKey == key(target) }
                 if !exists { break }
                 let choice = try await model.fileConflict(path: target.path, directory: entry.kind == .directory, scope: scope, rename: entry.kind == .file ? target : nil)
                 switch choice {
@@ -56,10 +56,10 @@ import TermviaCore
         }
     }
     static func drop(_ payload: FileDragPayload, ontoRemote session: Session?, directory: String, model: AppModel) {
-        guard let session, session.host != nil else { model.error = T("请先打开远程会话"); return }
+        guard model.layout.panelVisible, model.layout.panel == "文件", let session, model.active?.id == session.id, session.host != nil else { model.error = T("请先打开远程会话"); return }
         if !payload.localPaths.isEmpty {
             upload(payload.localPaths.map { URL(fileURLWithPath: $0) }, model: model, session: session, directory: directory)
-        } else if let sourceID = payload.sessionID, let source = model.sessions.first(where: { $0.id == sourceID }), source.host?.id == session.host?.id {
+        } else if let sourceID = payload.sessionID, let source = model.allSessions.first(where: { $0.id == sourceID }), source.host?.id == session.host?.id {
             do {
                 guard payload.entries.allSatisfy({ $0.kind == .file }) else { throw SSHError.invalid("请选择普通文件；目录和符号链接不自动跟随") }
                 let operations = try payload.entries.compactMap { entry -> SFTPOperation? in
@@ -72,12 +72,12 @@ import TermviaCore
         } else { model.error = T("请切换到来源主机后再操作") }
     }
     static func drop(_ payload: FileDragPayload, ontoLocal directory: URL, model: AppModel) {
-        if let sourceID = payload.sessionID, let source = model.sessions.first(where: { $0.id == sourceID }), source.host != nil {
+        if let sourceID = payload.sessionID, let source = model.allSessions.first(where: { $0.id == sourceID }), source.host != nil {
             download(payload.entries, model: model, session: source, directory: directory)
         } else if !payload.localPaths.isEmpty {
             let urls = payload.localPaths.map { URL(fileURLWithPath: $0) }
             Task {
-                do { try await model.performLocalFileOperation { try LocalFileOperations.relocate(urls, into: directory, copy: true) }; model.refreshLocalFiles() }
+                do { try await model.performLocalFileOperation(title: "复制", paths: urls.map(\.path).joined(separator: "\n") + " → " + directory.path) { try LocalFileOperations.relocate(urls, into: directory, copy: true) }; model.refreshLocalFiles() }
                 catch { model.error = error.localizedDescription }
             }
         } else { model.error = T("请切换到来源主机后再操作") }
