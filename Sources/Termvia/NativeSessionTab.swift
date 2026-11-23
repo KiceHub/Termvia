@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TermviaCore
 
 /// The toolbar has a separate hosting hierarchy. Own its context menu in AppKit
 /// and dispatch commands after tracking ends, before presenting workspace UI.
@@ -8,9 +9,10 @@ struct NativeSessionTab: NSViewRepresentable {
         let title: String
         let enabled: Bool
         let perform: (() -> Void)?
+        var shortcut: AppShortcutBinding? = nil
         var children: [Action] = []
-        init(_ title: String, enabled: Bool = true, action: @escaping () -> Void) {
-            self.title = title; self.enabled = enabled; self.perform = action
+        init(_ title: String, enabled: Bool = true, shortcut: AppShortcutBinding? = nil, action: @escaping () -> Void) {
+            self.title = title; self.enabled = enabled; self.shortcut = shortcut; self.perform = action
         }
         init(_ title: String, children: [Action]) { self.title = title; enabled = true; perform = nil; self.children = children }
         private init() { title = ""; enabled = false; perform = nil }
@@ -51,6 +53,10 @@ struct NativeSessionTab: NSViewRepresentable {
                 guard action.perform != nil else { menu.addItem(.separator()); continue }
                 let item = NSMenuItem(title: action.title, action: #selector(invoke(_:)), keyEquivalent: "")
                 item.target = self; item.representedObject = action; item.isEnabled = action.enabled
+                if let shortcut = action.shortcut, shortcut.isEnabled {
+                    item.keyEquivalent = shortcut.key
+                    item.keyEquivalentModifierMask = shortcut.modifiers.appKit
+                }
                 menu.addItem(item)
             }
             return menu

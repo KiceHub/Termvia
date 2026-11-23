@@ -662,3 +662,18 @@
 "未保存更改将丢失，传输将取消。" = "Ungesicherte Änderungen gehen verloren und Übertragungen werden abgebrochen.";
 
 "另有 %d 项" = "Und %d weitere";
+"查找终端文本…" = "Terminaltext suchen …";
+"查找终端文本" = "Terminaltext suchen";
+"终端查找" = "Terminalsuche";
+"上一个匹配项" = "Vorheriger Treffer";
+"下一个匹配项" = "Nächster Treffer";
+"查找" = "Suchen";
+"查找..." = "Suchen...";
+"区分大小写" = "Groß- und Kleinschreibung";
+"全字符匹配" = "Ganze Wörter";
+"循环查找" = "Suche wiederholen";
+"正则表达式" = "Regulärer Ausdruck";
+"高级查找" = "Erweiterte Suche";
+"替换" = "Ersetzen";
+"无法解析主机地址 %@" = "Hostadresse %@ kann nicht aufgelöst werden";
+"服务器不支持安全替换文件" = "Der Server unterstützt kein sicheres Ersetzen von Dateien";

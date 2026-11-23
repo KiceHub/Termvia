@@ -16,13 +16,15 @@ public struct HostOrganization: Codable, Equatable, Sendable {
         appearances = try (values.decodeIfPresent([String: HostGroupAppearance].self, forKey: .appearances) ?? [:]).mapValues { $0.validated() }
     }
     public func sections(_ connections: [SSHHost], search: String) -> [HostGroup] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         let original = HostGroup.sections(connections, search: search, defaultGroupName: defaultGroupName)
-        var names: [String] = [""]
-        for name in groups + original.map({ $0.name ?? "" }) + [""] where !names.contains(name) { names.append(name) }
+        let matchingGroups = Dictionary(uniqueKeysWithValues: original.map { ($0.name ?? "", $0) })
+        var seenNames = Set<String>()
+        let names = ([""] + groups + original.map { $0.name ?? "" }).filter { seenNames.insert($0).inserted }
         let ranks = Dictionary(hosts.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         return names.compactMap { name -> HostGroup? in
             let groupName: String? = name.isEmpty ? nil : name
-            if let group = original.first(where: { $0.name == groupName }) {
+            if let group = matchingGroups[name] {
                 // Natural name order is the deterministic tie breaker for newly added hosts.
                 let members = group.hosts.enumerated().sorted {
                     let lhs = ranks[$0.element.id, default: Int.max], rhs = ranks[$1.element.id, default: Int.max]
@@ -30,7 +32,8 @@ public struct HostOrganization: Codable, Equatable, Sendable {
                 }.map(\.element)
                 return HostGroup(name: groupName, hosts: members, displayName: groupName == nil ? defaultGroupName : nil)
             }
-            return search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? HostGroup(name: groupName, hosts: [], displayName: groupName == nil ? defaultGroupName : nil) : nil
+            let emptyGroup = HostGroup(name: groupName, hosts: [], displayName: groupName == nil ? defaultGroupName : nil)
+            return query.isEmpty || HostGroup.matches(emptyGroup.title, query: query) ? emptyGroup : nil
         }
     }
 }

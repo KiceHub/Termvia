@@ -32,7 +32,15 @@ struct NativeSearchField: NSViewRepresentable {
         private var pendingFocus = false
         private var focusScheduled = false
         func requestFocus() { pendingFocus = true; focusWhenAttached() }
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); focusWhenAttached() }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didEndSheetNotification, object: nil)
+            if let window {
+                NotificationCenter.default.addObserver(self, selector: #selector(sheetDidEnd(_:)), name: NSWindow.didEndSheetNotification, object: window)
+            }
+            focusWhenAttached()
+        }
+        @objc private func sheetDidEnd(_ notification: Notification) { focusWhenAttached() }
         private func focusWhenAttached() {
             guard pendingFocus, !focusScheduled, window != nil else { return }
             focusScheduled = true

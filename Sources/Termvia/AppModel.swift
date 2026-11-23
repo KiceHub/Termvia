@@ -60,6 +60,10 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     let fileEditor = FileEditorController()
     let fileConflicts = FileConflictPrompts()
     let quitShortcut = HoldToQuit()
+    weak var workspaceWindow: NSWindow?
+    var workspaceFrameName: NSWindow.FrameAutosaveName?
+    private var savedWindowFrame: NSRect?
+    var terminalSearch: TerminalSearchPanel?
     private var transientSecrets: [UUID: String] = [:]
     private let credentialStore: CredentialStore
     private let hostSecrets: any CredentialSecretStore
@@ -68,11 +72,16 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     var splitAuxiliaryOwners: [UUID: [UUID: UUID]] = [:]
     @Published var splitTrees: [UUID: TerminalSplitTree] = [:]
     @Published var splitSessions: [UUID: Session] = [:]
-    @Published var splitFocus: [UUID: UUID] = [:]
+    @Published var splitFocus: [UUID: UUID] = [:] {
+        didSet {
+            if let selected, oldValue[selected] != splitFocus[selected] { terminalSearch?.close() }
+        }
+    }
     @Published var splitRequest: SplitRequest?
     @Published var selected: UUID? {
         didSet {
             guard oldValue != selected else { return }
+            terminalSearch?.close()
             if let previous = sessions.first(where: { $0.id == oldValue }), previous.initialDirectoryAttemptCompleted, !previous.fileMutationInProgress { previous.cancelListing() }
             switchWorkspace(to: active)
             focusTerminal()
@@ -110,6 +119,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     @Published var layout: WorkspaceLayout {
         didSet {
             Localization.preference = layout.language
+            if oldValue.language != layout.language { terminalSearch?.localize(); fileEditor.localizeFind() }
             if oldValue.appearance != layout.appearance { synchronizeApplicationAppearance() }
             if !restoringWorkspace {
                 if oldValue.monitorVisible != layout.monitorVisible {
@@ -123,12 +133,11 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
                 }
                 captureWorkspace(); reconcileMonitoring()
             }
-            layoutSaveTask?.cancel()
             if oldValue.fontSize != layout.fontSize {
                 for session in allSessions where !session.isStartPage { session.terminal.font = .monospacedSystemFont(ofSize: layout.fontSize, weight: .regular) }
             }
-            layoutSaveTask = Task { [weak self] in
-                do { try await Task.sleep(for: .milliseconds(250)); self?.saveLayout() } catch {}
+            if oldValue.appearance != layout.appearance || oldValue.language != layout.language {
+                saveGlobalAppearance()
             }
         }
     }
@@ -138,7 +147,8 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         guard let activity = active?.activity else { return [] }
         let owners = activeSplitTree?.leaves.compactMap { session($0)?.activity } ?? []
         return transfers.filter { item in
-            item.activity === activity || ((item.editorOwned || owners.contains { $0 === item.activity }) && active?.host != nil && item.host.id == active?.host?.id)
+            if item.editorOwned { return item.activity === activity || owners.contains { $0 === item.activity } }
+            return item.activity === activity || (owners.contains { $0 === item.activity } && item.host.id == active?.host?.id)
         }
     }
     @Published var error: String?
@@ -151,7 +161,12 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     @Published var hostTrustWarning: String?
     @Published var hostTrustToInspect: SSHHost?
     @Published var selectedHostID: UUID?
-    @Published var hostSearch = ""
+    @Published var hostSearch = "" {
+        didSet {
+            if hostSearch != oldValue, !hostSearchCollapsedGroups.isEmpty { hostSearchCollapsedGroups.removeAll() }
+        }
+    }
+    @Published var hostSearchCollapsedGroups = Set<String>()
     @Published private(set) var hostSearchFocusRevision = 0
     let root: URL
     var commands: SSHCommands { SSHCommands(knownHosts: root.appendingPathComponent("known_hosts").path, useAskpass: true, suppressWarnings: settings.suppressOpenSSHWarnings, keepAliveInterval: settings.sshKeepAlive ? settings.validated().sshKeepAliveInterval : 0) }
@@ -160,7 +175,9 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     private var fileJobs: [UUID: Task<Void, Never>] = [:]
     @Published private var filePlans = Set<UUID>()
     private var retiringSessions: [UUID: Session] = [:]
-    private var layoutSaveTask: Task<Void, Never>?
+    private var savedLayout: WorkspaceLayout?
+    private var savedWorkspaces = HostWorkspaceStore()
+    private var pendingWorkspaceSaves = Set<String>()
     private var settingsSaveTask: Task<Void, Never>?
     private var monitorJobs: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
     private var reconnectJobs: [UUID: Task<Void, Never>] = [:]
@@ -184,7 +201,10 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         colorScheme = AppAppearance.scheme(for: NSApplication.shared.effectiveAppearance)
         let layoutFile = root.appendingPathComponent("workspace.json")
         if FileManager.default.fileExists(atPath: layoutFile.path) {
-            do { layout = try JSONDecoder().decode(WorkspaceLayout.self, from: Data(contentsOf: layoutFile)).validated() }
+            do {
+                layout = try JSONDecoder().decode(WorkspaceLayout.self, from: Data(contentsOf: layoutFile)).validated()
+                savedLayout = layout
+            }
             catch { self.error = T("无法读取工作区设置：%@", error.localizedDescription) }
         }
         Localization.preference = layout.language
@@ -204,7 +224,10 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         catch { hostReadFailure = error.localizedDescription; self.error = T("无法读取主机配置：%@", error.localizedDescription) }
         let workspaceFile = root.appendingPathComponent("host-workspaces.json")
         if FileManager.default.fileExists(atPath: workspaceFile.path) {
-            do { workspaces = try HostWorkspaceStore.decode(Data(contentsOf: workspaceFile), home: localPath) }
+            do {
+                workspaces = try HostWorkspaceStore.decode(Data(contentsOf: workspaceFile), home: localPath)
+                savedWorkspaces = workspaces
+            }
             catch { workspaceReadFailure = error.localizedDescription; self.error = T("无法读取主机布局，已保留原文件：%@", error.localizedDescription) }
         }
         if workspaces.states["start"] == nil {
@@ -241,16 +264,42 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         if colorScheme != scheme { colorScheme = scheme }
     }
     var locale: Locale { Localization.locale(for: layout.language) }
-    func saveLayout() {
+    private func writeLayout(_ value: WorkspaceLayout) throws {
+        guard savedLayout != value else { return }
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        try encoder.encode(value).write(to: root.appendingPathComponent("workspace.json"), options: .atomic)
+        savedLayout = value
+    }
+    private func saveGlobalAppearance() {
+        var value = savedLayout ?? WorkspaceLayout()
+        value.appearance = layout.appearance
+        value.language = layout.language
+        do { try writeLayout(value) }
+        catch { self.error = T("无法保存工作区设置：%@", error.localizedDescription) }
+    }
+    func saveLayout(keys: Set<String>? = nil) {
         captureWorkspace()
+        pendingWorkspaceSaves.formUnion((keys ?? Set(workspaces.states.keys)).filter { !$0.hasPrefix("split:") })
+        if let window = workspaceWindow, let name = workspaceFrameName, window.frame != savedWindowFrame,
+           !window.styleMask.contains(.fullScreen) {
+            window.saveFrame(usingName: name)
+            savedWindowFrame = window.frame
+        }
         do {
-            let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-            func write(_ data: Data, name: String) throws {
-                let url = root.appendingPathComponent(name)
-                if (try? Data(contentsOf: url)) != data { try data.write(to: url, options: .atomic) }
+            let start = pendingWorkspaceSaves.contains("start")
+                ? workspace(for: "start").layout : PaneLayout(savedLayout ?? WorkspaceLayout())
+            try writeLayout(start.applying(to: layout))
+            if workspaceReadFailure == nil {
+                let changedKeys = pendingWorkspaceSaves.filter { savedWorkspaces.states[$0] != workspaces.states[$0] }
+                if !changedKeys.isEmpty {
+                    var value = savedWorkspaces
+                    for key in changedKeys { value.states[key] = workspaces.states[key] }
+                    let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+                    try encoder.encode(value).write(to: root.appendingPathComponent("host-workspaces.json"), options: .atomic)
+                    savedWorkspaces = value
+                }
+                pendingWorkspaceSaves.removeAll()
             }
-            try write(encoder.encode(layout.validated()), name: "workspace.json")
-            if workspaceReadFailure == nil { var persistent = workspaces; persistent.states = persistent.states.filter { !$0.key.hasPrefix("split:") }; try write(encoder.encode(persistent), name: "host-workspaces.json") }
         }
         catch { self.error = T("无法保存工作区设置：%@", error.localizedDescription) }
     }
@@ -300,6 +349,12 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     func workspace(for key: String) -> HostWorkspace {
         workspaces.states[key] ?? workspaces.states["start"] ?? HostWorkspace(layout: layout, localPath: FileManager.default.homeDirectoryForCurrentUser.path)
     }
+    func findOptions(for key: String) -> FindOptions { workspaces.states[key]?.findOptions ?? FindOptions() }
+    func setFindOptions(_ options: FindOptions, for key: String) {
+        var state = workspace(for: key)
+        state.findOptions = options
+        workspaces.states[key] = state
+    }
     func paneBinding<Value>(_ path: WritableKeyPath<WorkspaceLayout, Value>, workspace key: String) -> Binding<Value> {
         Binding(get: { self.workspaceKey == key ? self.layout[keyPath: path] : self.workspace(for: key).layout.applying(to: self.layout)[keyPath: path] }, set: { value in
             guard self.workspaceKey == key else { return }
@@ -337,14 +392,12 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     func rememberLocalPath(_ path: String, workspace key: String) {
         var state = workspace(for: key); guard state.localPath != path else { return }
         state.localPath = path; workspaces.states[key] = state
-        saveLayout()
     }
     func refreshLocalFiles() { localFilesRevision += 1 }
     private func rememberRemotePath(_ session: Session, _ path: String) {
         let key = Self.workspaceKey(for: session)
         var state = workspace(for: key); guard state.remotePath != path else { return }
         state.remotePath = path; workspaces.states[key] = state
-        saveLayout()
     }
     func showHosts() {
         if let active, !active.isStartPage { newStartPage(); return }
@@ -449,14 +502,16 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     func hasSavedHostSecret(_ id: UUID) -> Bool { (try? hostSecrets.read(id)) != nil }
     func saveConnection(_ host: SSHHost, secret: String) throws {
         try validateLoginSecret(secret)
-        let previousProtocol = hosts.first(where: { $0.id == host.id })?.fileProtocol ?? .sftp
+        let previous = hosts.first(where: { $0.id == host.id })
+        let previousProtocol = previous?.fileProtocol ?? .sftp
         let before = try hostSecrets.read(host.id)
-        let changed = hosts.first(where: { $0.id == host.id }).map { !sameLogin($0, host) } ?? false
+        let changed = previous.map { !sameLogin($0, host) } ?? false
+        let moved = previous.map { $0.group != host.group } ?? false
         do {
             if host.credentialID != nil { try hostSecrets.delete(host.id) }
             else if !secret.isEmpty { try hostSecrets.write(secret, id: host.id) }
             else if changed { try hostSecrets.delete(host.id) }
-            try save(host)
+            try save(host, select: !moved && hostCopyDraft?.host.id != host.id)
         } catch {
             if let before { try? hostSecrets.write(before, id: host.id) } else { try? hostSecrets.delete(host.id) }
             throw error
@@ -470,7 +525,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     }
     @discardableResult func copyHost(_ original: SSHHost) throws -> SSHHost {
         let original = hosts.first { $0.id == original.id } ?? original
-        var copy = original; copy.id = UUID(); copy.transportCommand = nil
+        var copy = original; copy.id = UUID(); copy.transportCommand = nil; copy.connectionEndpoint = nil
         let base = T("%@ 副本", original.name)
         copy.name = base
         var index = 2
@@ -483,8 +538,9 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         hostManagerPresented = true
         return copy
     }
-    func save(_ requestedHost: SSHHost) throws {
+    func save(_ requestedHost: SSHHost, select: Bool = true) throws {
         var host = requestedHost
+        let previousGroup = hosts.first(where: { $0.id == host.id })?.group
         if let existing = hosts.first(where: { $0.id == host.id }) {
             if existing.address == host.address && existing.port == host.port {
                 if existing.detectedSystem != nil { host.detectedSystem = existing.detectedSystem; host.detectedSystemVersion = existing.detectedSystemVersion }
@@ -498,11 +554,13 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         var updated = hosts
         if let i = updated.firstIndex(where: { $0.id == host.id }) { updated[i] = host } else { updated.append(host) }
         try hostStore.save(updated)
+        if !select, selectedHostID == host.id, previousGroup != host.group { selectedHostID = nil }
         hosts = updated
         if host.credentialID != nil { transientSecrets[host.id] = nil }
-        selectedHostID = host.id
+        if select { selectedHostID = host.id }
     }
     var hostGroups: [HostGroup] { organization.sections(displayHosts, search: hostSearch) }
+    var isSearchingHosts: Bool { !hostSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var groupNames: [String] { organization.sections(hosts, search: "").compactMap(\.name) }
     var defaultGroupTitle: String { organization.defaultGroupName ?? T("默认分组") }
     func presentGroupEditor(_ group: HostGroup? = nil) { groupEditor = GroupEditorRequest(group: group) }
@@ -524,9 +582,39 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         try saveOrganization(value)
     }
     func saveOrganization(_ value: HostOrganization) throws {
+        try writeOrganization(value)
+        organization = value
+    }
+    private func writeOrganization(_ value: HostOrganization) throws {
         if let organizationReadFailure { throw SSHError.invalid(organizationReadFailure) }
         try JSONEncoder().encode(value).write(to: root.appendingPathComponent("host-groups.json"), options: .atomic)
-        organization = value
+    }
+    private func saveHostOrganization(_ value: HostOrganization, hosts updatedHosts: [SSHHost]) throws {
+        guard updatedHosts != hosts else {
+            if value != organization { try saveOrganization(value) }
+            return
+        }
+        if let organizationReadFailure { throw SSHError.invalid(organizationReadFailure) }
+        if let hostReadFailure { throw SSHError.invalid(T("原主机配置读取失败，已保留文件。请修复 hosts.json 并重新打开应用：%@", hostReadFailure)) }
+        // Restore the exact host document and permissions if the second write fails.
+        let original = try Data(contentsOf: hostStore.url)
+        let permissions = try FileManager.default.attributesOfItem(atPath: hostStore.url.path)[.posixPermissions]
+        do {
+            try hostStore.save(updatedHosts)
+            if value != organization { try writeOrganization(value) }
+        } catch {
+            let saveError = error
+            do {
+                try original.write(to: hostStore.url, options: .atomic)
+                if let permissions { try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: hostStore.url.path) }
+            } catch {
+                hostReadFailure = error.localizedDescription
+                throw SSHError.invalid(T("分组保存失败，无法恢复主机配置：%@", error.localizedDescription))
+            }
+            throw saveError
+        }
+        hosts = updatedHosts
+        if value != organization { organization = value }
     }
     func createGroup(_ name: String) throws {
         try saveGroup(name: name, appearance: HostGroupAppearance(), editing: nil)
@@ -564,30 +652,15 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
             value.groups = sections.map { $0.name ?? "" } + [name]
         }
         value.appearances[HostGroupAppearance.key(for: targetName)] = appearance == HostGroupAppearance() ? nil : appearance
-        if updatedHosts != hosts {
-            // Both files must succeed before publishing. Restore the exact
-            // host document and permissions if the organization write fails.
-            let original = try Data(contentsOf: hostStore.url)
-            let permissions = try FileManager.default.attributesOfItem(atPath: hostStore.url.path)[.posixPermissions]
-            do { try hostStore.save(updatedHosts); try saveOrganization(value) }
-            catch {
-                let saveError = error
-                do {
-                    try original.write(to: hostStore.url, options: .atomic)
-                    if let permissions { try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: hostStore.url.path) }
-                } catch {
-                    hostReadFailure = error.localizedDescription
-                    throw SSHError.invalid(T("分组保存失败，无法恢复主机配置：%@", error.localizedDescription))
-                }
-                throw saveError
-            }
-            hosts = updatedHosts
-        } else { try saveOrganization(value) }
+        try saveHostOrganization(value, hosts: updatedHosts)
         if let previous = group?.name, previous != targetName {
-            layout.collapsedHostGroups = layout.collapsedHostGroups.map { $0 == "group:" + previous ? "group:" + name : $0 }
+            let oldKey = HostGroupAppearance.key(for: previous)
+            let newKey = HostGroupAppearance.key(for: name)
+            layout.collapsedHostGroups = layout.collapsedHostGroups.map { $0 == oldKey ? newKey : $0 }
+            if hostSearchCollapsedGroups.remove(oldKey) != nil { hostSearchCollapsedGroups.insert(newKey) }
             if newHostGroup == previous { newHostGroup = name }
         }
-        hostSearch = ""
+        if isSearchingHosts, !hostGroups.contains(where: { $0.name == targetName }) { hostSearch = "" }
     }
     /// Native List insertion positions include expanded hosts as well as group headers.
     func moveSidebarItem(_ token: String, into rows: [HostSidebarRow], at index: Int) -> Bool {
@@ -619,13 +692,31 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
                 var value = organization; value.groups = names.filter { $0 != source }
                 value.groups.insert(source, at: atEnd ? value.groups.count : value.groups.firstIndex(of: target) ?? value.groups.count)
                 try saveOrganization(value)
-            } else if token.hasPrefix("host:"), let id = UUID(uuidString: String(token.dropFirst(5))), var host = hosts.first(where: { $0.id == id }) {
-                guard id != hostID else { return false }
-                host.group = group; try save(host)
+            } else if token.hasPrefix("host:"), let id = UUID(uuidString: String(token.dropFirst(5))),
+                      let sourceIndex = hosts.firstIndex(where: { $0.id == id }) {
+                let sections = organization.sections(hosts, search: "")
+                guard id != hostID, let destination = sections.first(where: { $0.name == group }) else { return false }
+                let existingMembers = destination.hosts.map(\.id)
+                let moved = !existingMembers.contains(id)
+                var members = existingMembers.filter { $0 != id }
+                let insertion: Int
+                if let hostID {
+                    guard let index = members.firstIndex(of: hostID) else { return false }
+                    insertion = index
+                } else { insertion = members.count }
+                members.insert(id, at: insertion)
+                guard members != existingMembers else { return true }
+                var updatedHosts = hosts
+                if moved { updatedHosts[sourceIndex].group = group }
                 var value = organization
-                value.hosts = organization.sections(hosts, search: "").flatMap(\.hosts).map(\.id).filter { $0 != id }
-                value.hosts.insert(id, at: hostID.flatMap { value.hosts.firstIndex(of: $0) } ?? value.hosts.count)
-                try saveOrganization(value)
+                value.groups = sections.map { $0.name ?? "" }
+                value.hosts = sections.flatMap { section in
+                    section.id == destination.id ? members : section.hosts.map(\.id).filter { $0 != id }
+                }
+                try saveHostOrganization(value, hosts: updatedHosts)
+                if moved {
+                    if selectedHostID == id { selectedHostID = nil }
+                } else { selectedHostID = id }
             } else { return false }
             return true
         } catch { self.error = error.localizedDescription; return false }
@@ -649,6 +740,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         do {
             let session = try makeSession(host, activity: active?.isStartPage == true ? active?.activity : nil)
             if let active, active.isStartPage, let index = sessions.firstIndex(where: { $0.id == active.id }) {
+                saveLayout(keys: ["start"])
                 session.renameTab(active.customTabTitle ?? ""); if tabRenameTarget === active { tabRenameTarget = session }; active.stop(); sessions[index] = session
             } else { sessions.append(session) }
             selected = session.id
@@ -682,7 +774,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
             guard let self, let session, !self.shuttingDown else { return }
             guard !self.isSplitSession(session) else { return }
             var state = self.workspace(for: key); state.monitorSelection = selection.validated()
-            self.workspaces.states[key] = state; self.saveLayout()
+            self.workspaces.states[key] = state
         }
         session.terminal.onFocus = { [weak self, weak session] in
             guard let self, let session, self.focusedTerminal?.id != session.id, self.isSplitSession(session) else { return }
@@ -731,7 +823,8 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         let eligible: Bool
         switch ended.phase {
         case .exited(let code): eligible = code == 255 && ended.connectedAt != nil
-        case .failed(let message): eligible = ended.isAutomaticReconnect && AppSettings.isTransientConnectionFailure(message)
+        case .failed(let message):
+            eligible = ended.isAutomaticReconnect && (ended.retryConnectionFailure || AppSettings.isTransientConnectionFailure(message))
         default: eligible = false
         }
         guard eligible else { return }
@@ -767,40 +860,12 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
             defer { fileJobs[token] = nil; session.connectionJob = nil }
             do {
                 try Task.checkCancellation()
-                let chain = try SSHRoute.chain(for: hosts.first(where: { $0.id == host.id }) ?? host, hosts: hosts, proxies: settings.proxies)
-                let route = try SSHRouteConnection(wireGuardPool: wireGuardPool)
+                let (host, authentication, route, security) = try await connectRoute(for: host, allowPrompts: !session.isAutomaticReconnect)
+                guard !Task.isCancelled, session.phase == .connecting else { route.close(); return }
+                defer { route.finishVerification() }
                 session.routeConnection = route
-                var routed: SSHHost? = nil
-                for item in chain {
-                    try Task.checkCancellation()
-                    var next = try resolvedHost(item)
-                    if let previous = routed {
-                        next.transportCommand = try await route.jump(previous, to: next, commands: commands, authentication: authentication(for: previous), allowPrompts: !session.isAutomaticReconnect)
-                    } else if case .proxy(let id) = item.upstream {
-                        guard let proxy = settings.proxies.first(where: { $0.id == id }) else { throw SSHError.invalid("找不到代理服务器") }
-                        let password = try FileSecretStore(directory: root.appendingPathComponent("proxy-secrets")).read(id) ?? ""
-                        next.transportCommand = try await route.proxy(proxy, password: password, target: next)
-                    }
-                    routed = next
-                }
-                guard let host = routed else { throw SSHError.invalid("找不到上游跳板机") }
-                try session.installTransport(host: host, authentication: authentication(for: host), commands: commands)
-                let lease = try session.authentication?.lease(allowPrompts: !session.isAutomaticReconnect); defer { lease?.close() }
-                let result: ConnectionVerification
-                if let lease { result = try await lease.verifyConnection(host, commands: commands) }
-                else { result = try await ConnectionVerifier.verify(host, commands: commands) }
-                try Task.checkCancellation()
-                guard result.status == 0 else {
-                    if !session.isAutomaticReconnect && (result.output.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") || result.output.contains("Offending")) {
-                        let regex = try NSRegularExpression(pattern: "SHA256:[A-Za-z0-9+/=]+")
-                        let fingerprints = regex.matches(in: result.output, range: NSRange(result.output.startIndex..., in: result.output)).compactMap { Range($0.range, in: result.output).map { String(result.output[$0]) } }
-                        hostTrustWarning = T("服务器公钥已变更，连接已阻止。请核对指纹后再重新信任。") + "\n" + fingerprints.joined(separator: "\n")
-                        hostTrustToInspect = host
-                    }
-                    session.connectionFailed(result.output); return
-                }
-                lease?.confirmAuthentication()
-                session.connectionSecurity = result.security
+                try session.installTransport(host: host, authentication: authentication, commands: commands)
+                session.connectionSecurity = security
                 session.connectionPrepared()
                 if session.connected {
                     if isAuxiliaryOwner(session) { refreshDirectory(session) } else { session.initialDirectoryAttemptCompleted = true; reconcileMonitoring() }
@@ -822,7 +887,20 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
                         }
                     }
                 }
-            } catch is CancellationError {} catch { if !session.connected { session.connectionFailed(error.localizedDescription) } else { log(error.localizedDescription, activity: session.activity) } }
+            } catch is CancellationError {} catch {
+                if !session.connected {
+                    if let failure = error as? SSHRouteVerificationFailure, !session.isAutomaticReconnect,
+                       (failure.result.output.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") || failure.result.output.contains("Offending")) {
+                        let detail = failure.result.output
+                        let fingerprints = detail.matches(of: #/SHA256:[A-Za-z0-9+/=]+/#).map { String($0.output) }
+                        hostTrustWarning = T("服务器公钥已变更，连接已阻止。请核对指纹后再重新信任。") + "\n" + fingerprints.joined(separator: "\n")
+                        hostTrustToInspect = failure.host
+                    }
+                    session.connectionFailed(error.localizedDescription, retry: (error as? SSHAddressResolutionFailure)?.isRetryable == true)
+                } else {
+                    log(error.localizedDescription, activity: session.activity)
+                }
+            }
         }
         session.connectionJob = task; fileJobs[token] = task
     }
@@ -883,12 +961,23 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
             }
         } catch { self.error = error.localizedDescription }
     }
-    func retirePane(_ session: Session) {
+    func retirePane(_ session: Session, savePreferences: Bool = true) {
+        if savePreferences { saveLayout(keys: [Self.workspaceKey(for: session)]) }
         reconnectJobs.removeValue(forKey: session.id)?.cancel(); restartJobs.removeValue(forKey: session.id)?.cancel()
+        closeSessionActivity(session)
         session.stop()
         if session.terminal.process.running || session.terminal.process.windingDown { retiringSessions[session.id] = session }
-        for transfer in transfers where transfer.activity === session.activity { cancel(transfer.id) }
-        session.authentication?.replaceCachedSecret(nil); session.activity.close()
+        session.authentication?.replaceCachedSecret(nil)
+    }
+    private func closeSessionActivity(_ session: Session) {
+        guard !session.activity.isClosed else { return }
+        let owned = transfers.filter { $0.activity === session.activity }
+        let editorTransfers = owned.filter(\.editorOwned)
+        for transfer in editorTransfers { transfer.control.cancel() }
+        session.activity.close()
+        let editorJobs = editorTransfers.compactMap { jobs[$0.id] }
+        fileEditor.disconnectRemoteDocuments(for: session.activity, transfers: editorJobs)
+        for transfer in owned { cancel(transfer.id) }
     }
     func reorderTabs(_ ids: [UUID], before target: UUID?) {
         guard let reordered = TabOrdering.moving(sessions, ids: ids, before: target, id: \.id),
@@ -896,23 +985,31 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         sessions = reordered
     }
     func close(_ session: Session) {
+        guard let index = sessions.firstIndex(where: { $0 === session }) else { return }
+        if !shuttingDown {
+            let panes = splitTrees[session.id]?.leaves.compactMap { splitSessions[$0] } ?? []
+            saveLayout(keys: Set(([session] + panes).map { Self.workspaceKey(for: $0) }))
+        }
         if tabRenameTarget === session { tabRenameTarget = nil }
         if let tree = splitTrees.removeValue(forKey: session.id) {
             for id in tree.leaves where id != session.id {
                 if let child = splitSessions.removeValue(forKey: id) {
-                    retirePane(child)
+                    retirePane(child, savePreferences: false)
                 }
             }
             splitFocus[session.id] = nil; splitAuxiliaryOwners[session.id] = nil
         }
-        guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
         reconnectJobs.removeValue(forKey: session.id)?.cancel()
         restartJobs.removeValue(forKey: session.id)?.cancel()
-        session.stop(); if !session.isStartPage, session.terminal.process.running { retiringSessions[session.id] = session }; sessions.remove(at: index)
-        for transfer in transfers where transfer.activity === session.activity { cancel(transfer.id) }
+        closeSessionActivity(session)
+        session.stop()
+        if !session.isStartPage, session.terminal.process.running || session.terminal.process.windingDown || shuttingDown {
+            retiringSessions[session.id] = session
+        }
+        sessions.remove(at: index)
         session.authentication?.replaceCachedSecret(nil)
         if selected == session.id { selected = sessions.isEmpty ? nil : sessions[min(index, sessions.count - 1)].id }
-        session.activity.close()
+        workspaces.states.removeValue(forKey: "split:" + session.id.uuidString)
         schedule()
         if sessions.isEmpty { newStartPage() }
     }
@@ -938,7 +1035,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         session.detectedSystem != "windows"
     }
     var pendingTransfers: [Transfer] {
-        transfers.filter { ["排队中", "传输中", "正在取消", "已暂停"].contains($0.state) }
+        transfers.filter { $0.activity?.isClosed != true && ["排队中", "传输中", "正在取消", "已暂停"].contains($0.state) }
     }
     var showsTransferButton: Bool { !layout.panelVisible && !pendingTransfers.isEmpty }
     func showPendingTransfers() {
@@ -965,7 +1062,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         for token in filePlans where filePlanOwners[token] === session.activity {
             fileJobs[token]?.cancel(); fileConflicts.cancel(scope: token)
         }
-        for transfer in transfers where transfer.activity === session.activity && ["排队中", "传输中", "已暂停"].contains(transfer.state) {
+        for transfer in transfers where !transfer.editorOwned && transfer.activity === session.activity && ["排队中", "传输中", "已暂停"].contains(transfer.state) {
             if shuttingDown || transfer.operationTitle != nil { cancel(transfer.id); continue }
             pausedTransfers.insert(transfer.id)
             update(transfer.id, state: "已暂停")
@@ -977,7 +1074,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     }
     func canResumeTransfer(_ transfer: Transfer) -> Bool {
         if transfer.state == "已暂停", (jobs[transfer.id] != nil || fileOperationTokens[transfer.id].flatMap { fileJobs[$0] } != nil), transfer.control.isPaused { return true }
-        return transfer.state == "已暂停" && jobs[transfer.id] == nil && allSessions.contains {
+        return !transfer.editorOwned && transfer.state == "已暂停" && jobs[transfer.id] == nil && allSessions.contains {
             $0.activity === transfer.activity && $0.connected && $0.phase == .running &&
             $0.host?.address == transfer.host.address && $0.host?.port == transfer.host.port && $0.host?.user == transfer.host.user
         }
@@ -1128,7 +1225,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         var destinations = activeTransfers
         var hostCounts = Dictionary(grouping: activeTransfers, by: { $0.host.id }).mapValues(\.count)
         for transfer in transfers where transfer.state == "排队中" {
-            if let owner = allSessions.first(where: { $0.activity === transfer.activity }), owner.host != nil, !owner.connected || owner.phase != .running {
+            if !transfer.editorOwned, let owner = allSessions.first(where: { $0.activity === transfer.activity }), owner.host != nil, !owner.connected || owner.phase != .running {
                 pausedTransfers.insert(transfer.id); update(transfer.id, state: "已暂停"); continue
             }
             guard jobs.count < 3 else { break }
@@ -1154,17 +1251,19 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
                     let download = try transfer.downloadTarget.map { try DownloadStaging(target: $0, overwrite: overwrite) }
                     defer { download?.close() }
                     try await TransferConnection(commands: commands, transfer: transfer).file(local: download?.fileURL.path ?? transfer.local, remote: transfer.remote, upload: transfer.upload)
-                    try Task.checkCancellation(); try download?.commit()
+                    // Acknowledged editor uploads have already committed on the server.
+                    if !transfer.editorOwned || !transfer.upload { try Task.checkCancellation() }
+                    try download?.commit()
                     update(transfer.id, state: "成功")
-                    let succeeded = true
-                    if succeeded {
-                        if transfer.upload {
-                            for session in allSessions where session.host?.id == transfer.host.id && !session.fileMutationInProgress && Self.remoteListingPath(session.remotePath) == (transfer.remote as NSString).deletingLastPathComponent { refreshDirectory(session) }
-                        } else if !transfer.editorOwned { refreshLocalFiles() }
-                    }
+                    if transfer.upload {
+                        for session in allSessions where session.host?.id == transfer.host.id && !session.fileMutationInProgress && Self.remoteListingPath(session.remotePath) == (transfer.remote as NSString).deletingLastPathComponent { refreshDirectory(session) }
+                    } else if !transfer.editorOwned { refreshLocalFiles() }
                 } catch is TransferSkipped { update(transfer.id, state: "已跳过") }
                 catch is CancellationError { update(transfer.id, state: pausedTransfers.contains(transfer.id) ? "已暂停" : "已取消", detail: transfer.directory ? T("文件夹传输未完成，已完成的内容会保留。") : "") }
-                catch { update(transfer.id, state: pausedTransfers.contains(transfer.id) ? "已暂停" : "失败", detail: error.localizedDescription + (transfer.directory && transfer.upload ? "\n" + T("文件夹上传未完成，远端可能保留部分内容。") : "")) }
+                catch {
+                    if transfer.activity?.isClosed == true { update(transfer.id, state: "已取消") }
+                    else { update(transfer.id, state: pausedTransfers.contains(transfer.id) ? "已暂停" : "失败", detail: error.localizedDescription + (transfer.directory && transfer.upload ? "\n" + T("文件夹上传未完成，远端可能保留部分内容。") : "")) }
+                }
                 jobs[transfer.id] = nil; schedule()
             }
         }
@@ -1223,22 +1322,26 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     func shutdown() {
         guard !shuttingDown else { return }
         shuttingDown = true; tabRenameTarget = nil; tabNameDraft = ""; quitShortcut.uninstall()
+        terminalSearch?.close()
         applicationAppearanceObservation?.invalidate(); applicationAppearanceObservation = nil; appearanceApplication = nil
         if let alert = transferConfirmation { alert.window.sheetParent?.endSheet(alert.window, returnCode: .alertSecondButtonReturn) }
         fileEditor.shutdown()
         authenticationPrompts.cancelAll(); transientSecrets.removeAll()
         fileConflicts.cancelAll()
-        layoutSaveTask?.cancel(); settingsSaveTask?.cancel(); saveLayout(); saveSettings(); cancelAutomaticReconnects()
+        settingsSaveTask?.cancel(); saveSettings(); cancelAutomaticReconnects()
         for task in restartJobs.values { task.cancel() }; restartJobs.removeAll()
         pausedTransfers.removeAll()
         for transfer in transfers where ["排队中", "已暂停"].contains(transfer.state) { update(transfer.id, state: "已取消") }
         for value in monitorJobs.values { value.task.cancel() }; monitorJobs.removeAll()
         for task in jobs.values { task.cancel() }
         for task in fileJobs.values { task.cancel() }
-        for session in allSessions + Array(retiringSessions.values) { session.stop() }
-        wireGuardPool.close()
+        saveLayout(keys: Set(allSessions.map { Self.workspaceKey(for: $0) }).union(["start"]))
+        for tab in sessions { close(tab) }
+        for session in retiringSessions.values { session.stop() }
     }
     func finishShutdown() async {
+        await fileEditor.finishShutdown()
+        wireGuardPool.close()
         await wireGuardPool.finish()
         // Cancellation can finish a parent before a newly registered child is
         // visible in its first snapshot. Drain until all channels have reaped.

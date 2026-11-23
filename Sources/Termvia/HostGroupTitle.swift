@@ -10,7 +10,7 @@ enum HostGroupTitleGrid {
     static var textLeading: CGFloat { iconColumn + spacing }
 }
 
-/// Keep native button drawing and state, overriding only icon/text geometry.
+/// Preserve native button interaction and use the group's palette for its artwork.
 final class HostGroupTitleCell: NSButtonCell {
     override func imageRect(forBounds rect: NSRect) -> NSRect {
         NSRect(x: rect.minX + (HostGroupTitleGrid.iconColumn - HostGroupTitleGrid.iconSize) / 2,
@@ -22,6 +22,17 @@ final class HostGroupTitleCell: NSButtonCell {
         title.origin.x = rect.minX + HostGroupTitleGrid.textLeading
         title.size.width = max(0, rect.maxX - title.minX)
         return title
+    }
+    override func drawImage(_ image: NSImage, withFrame frame: NSRect, in controlView: NSView) {
+        let artwork = self.image ?? image
+        let size = artwork.size
+        guard size.width > 0, size.height > 0 else { return }
+        let scale = min(1, frame.width / size.width, frame.height / size.height)
+        let width = size.width * scale, height = size.height * scale
+        let destination = NSRect(x: frame.midX - width / 2, y: frame.midY - height / 2, width: width, height: height)
+        // The window supplies the sheet transition. The group symbol keeps its
+        // own palette instead of receiving an additional button tint.
+        artwork.draw(in: destination, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
 }
 
@@ -38,9 +49,7 @@ struct HostGroupTitle: NSViewRepresentable {
         button.title = group.title
         button.dragToken = "group:" + (group.name ?? "")
         button.onActivate = toggle
-        let symbol = NSImage(systemSymbolName: appearance.symbol, accessibilityDescription: nil)
-            ?? NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
-        button.image = symbol?.withSymbolConfiguration(.init(paletteColors: [GroupAppearanceColor.native(appearance.resolvedColorHex)]))
+        button.applyArtwork(appearance)
         button.setAccessibilityLabel(group.title)
         button.setAccessibilityValue(T(expanded ? "已展开" : "已折叠"))
         button.setAccessibilityIdentifier("Termvia.HostGroup." + group.id)
@@ -51,6 +60,7 @@ class HostGroupTitleButton: NSButton, NSDraggingSource {
     var dragToken = "group:"
     var onActivate: (() -> Void)?
     private weak var activeDragArea: HostGroupDragContainer?
+    private var artworkAppearance: HostGroupAppearance?
     var canDragGroup: Bool { dragToken.hasPrefix("group:") && dragToken.count > 6 }
     var draggingWriter: NSPasteboardWriting? {
         guard canDragGroup else { return nil }
@@ -73,6 +83,14 @@ class HostGroupTitleButton: NSButton, NSDraggingSource {
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    func applyArtwork(_ appearance: HostGroupAppearance) {
+        guard artworkAppearance?.symbol != appearance.symbol ||
+                artworkAppearance?.resolvedColorHex != appearance.resolvedColorHex else { return }
+        artworkAppearance = appearance
+        let symbol = NSImage(systemSymbolName: appearance.symbol, accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
+        image = symbol?.withSymbolConfiguration(.init(paletteColors: [GroupAppearanceColor.native(appearance.resolvedColorHex)]))
+    }
     override var mouseDownCanMoveWindow: Bool { false }
     @objc private func activateGroup() { onActivate?() }
 
@@ -84,6 +102,7 @@ class HostGroupTitleButton: NSButton, NSDraggingSource {
         defer { highlight(false) }
         while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: .distantFuture, inMode: .eventTracking, dequeue: true) {
             if next.type == .leftMouseUp {
+                highlight(false)
                 if bounds.contains(convert(next.locationInWindow, from: nil)), let action { sendAction(action, to: target) }
                 return
             }

@@ -174,6 +174,7 @@ import TermviaCore
                     name = isolated ? nil : WorkspaceWindowGeometry.autosaveName
 #endif
                     WorkspaceWindowGeometry.configure(window, autosaveName: name)
+                    model.workspaceFrameName = name
 #if TERMVIA_DIAGNOSTICS
                     WindowStartupLaunchCheck.record("configured", window)
 #endif

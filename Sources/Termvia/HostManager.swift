@@ -13,6 +13,7 @@ struct HostManager: View {
     @ObservedObject var model: AppModel
     let host: SSHHost?
     let draft: HostCopyDraft?
+    let onSave: (SSHHost) -> Void
     @State private var name: String
     @State private var address: String
     @State private var user: String
@@ -31,8 +32,8 @@ struct HostManager: View {
     @State private var error: String?
     private var selectedCredential: LoginCredential? { model.credentials.first { $0.id == credentialID } }
     private var method: SSHAuthentication { identity.isEmpty ? .password : password.isEmpty ? .privateKey : .keyAndPassword }
-    init(model: AppModel, host: SSHHost? = nil, defaultGroup: String? = nil, draft: HostCopyDraft? = nil) {
-        self.model = model; self.host = host; self.draft = draft
+    init(model: AppModel, host: SSHHost? = nil, defaultGroup: String? = nil, draft: HostCopyDraft? = nil, onSave: @escaping (SSHHost) -> Void = { _ in }) {
+        self.model = model; self.host = host; self.draft = draft; self.onSave = onSave
         let initial = host ?? draft?.host
         let resolved = initial.flatMap { try? model.resolvedHost($0) } ?? initial
         _password = State(initialValue: draft?.secrets.password ?? "")
@@ -42,7 +43,7 @@ struct HostManager: View {
         _user = State(initialValue: resolved?.user ?? NSUserName())
         _port = State(initialValue: String(initial?.port ?? 22))
         _identity = State(initialValue: resolved?.identity ?? "")
-        _group = State(initialValue: initial?.group ?? defaultGroup ?? "")
+        _group = State(initialValue: (initial?.group ?? defaultGroup ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
         _fileProtocol = State(initialValue: initial?.fileProtocol ?? .sftp)
         _credentialID = State(initialValue: initial?.credentialID)
         switch initial?.upstream {
@@ -165,18 +166,20 @@ struct HostManager: View {
         updated.identity = (identity.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).expandingTildeInPath
         updated.fileProtocol = fileProtocol; updated.authentication = method; updated.credentialID = credentialID
         updated.group = group.isEmpty ? nil : group
+        let keepsImplicitLogin = credentialID == nil && updated.identity.isEmpty && password.isEmpty
+            && host.map { $0.credentialID == nil && $0.identity.isEmpty && !model.hasSavedHostSecret($0.id) } == true
+        if keepsImplicitLogin { updated.authentication = host?.authentication }
         if proxyKind == "none" { updated.upstream = nil }
         else if let id = UUID(uuidString: String(upstream.dropFirst(5))), upstream.hasPrefix("host:") { updated.upstream = .host(id) }
         else if let id = UUID(uuidString: String(upstream.dropFirst(6))), upstream.hasPrefix("proxy:") { updated.upstream = .proxy(id) }
         else { updated.upstream = nil }
         do {
             guard proxyKind == "none" || !upstream.isEmpty else { throw SSHError.invalid("请选择代理服务器") }
-            guard !updated.identity.isEmpty || !password.isEmpty else { throw SSHError.invalid("请输入密码或选择密钥") }
+            guard keepsImplicitLogin || !updated.identity.isEmpty || !password.isEmpty else { throw SSHError.invalid("请输入密码或选择密钥") }
             let stored = try LoginSecrets(password: password, passphrase: passphrase).stored(method: method)
             try model.saveConnection(updated, secret: credentialID == nil ? stored : "")
-            let groupID = updated.group.map { "group:" + $0 } ?? "ungrouped"
-            model.layout.collapsedHostGroups.removeAll { $0 == groupID }
-            model.hostSearch = ""; password = ""; passphrase = ""; model.showHosts(); dismiss()
+            onSave(updated)
+            password = ""; passphrase = ""; dismiss()
         } catch { self.error = error.localizedDescription }
     }
 }

@@ -39,12 +39,14 @@ struct SessionTab: View {
     let close: () -> Void
     var reconnect: (() -> Void)? = nil
     var rename: (() -> Void)? = nil
+    let findAction: NativeSessionTab.Action?
     var splitActions: [NativeSessionTab.Action] = []
     var hostIcon: String? = nil
     var doubleClickCloses = true
-    init(session: Session, selected: Bool, select: @escaping () -> Void, close: @escaping () -> Void, reconnect: (() -> Void)? = nil, rename: (() -> Void)? = nil, splitActions: [NativeSessionTab.Action] = [], hostIcon: String? = nil, doubleClickCloses: Bool = true, statusSession: Session? = nil) {
+    init(session: Session, selected: Bool, select: @escaping () -> Void, close: @escaping () -> Void, reconnect: (() -> Void)? = nil, rename: (() -> Void)? = nil, findAction: NativeSessionTab.Action? = nil, splitActions: [NativeSessionTab.Action] = [], hostIcon: String? = nil, doubleClickCloses: Bool = true, statusSession: Session? = nil) {
         self.session = session; self.state = statusSession ?? session; self.selected = selected; self.select = select; self.close = close
         self.reconnect = reconnect; self.rename = rename; self.splitActions = splitActions; self.hostIcon = hostIcon; self.doubleClickCloses = doubleClickCloses
+        self.findAction = findAction
     }
     @State private var hovered = false
     var displayTitle: String { session.customTabTitle ?? state.tabTitle }
@@ -82,6 +84,7 @@ struct SessionTab: View {
             actions.append(.separator)
         }
         if !session.isStartPage {
+            if let findAction { actions.append(findAction) }
             actions.append(.init(T("停止"), enabled: state.phase.isActive || state.reconnectPending) { state.stop() })
             if let reconnect { actions.append(.init(T("重新连接"), enabled: !state.restarting, action: reconnect)) }
         }

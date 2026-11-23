@@ -9,10 +9,11 @@ public struct HostGroup: Identifiable, Equatable, Sendable {
 
     public static func sections(_ hosts: [SSHHost], search: String, defaultGroupName: String? = nil) -> [HostGroup] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultTitle = defaultGroupName ?? T("默认分组")
         let filtered = hosts.filter { host in
             let group = host.group?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return query.isEmpty || [host.name, host.address, host.user, group.isEmpty ? (defaultGroupName ?? "") : group, String(host.port)].contains {
-                $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+            return query.isEmpty || [host.name, host.address, host.user, group.isEmpty ? defaultTitle : group, String(host.port)].contains {
+                matches($0, query: query)
             }
         }
         let groups = Dictionary(grouping: filtered) { host -> String in
@@ -29,5 +30,9 @@ public struct HostGroup: Identifiable, Equatable, Sendable {
             if $1.name == nil { return false }
             return $0.name!.localizedStandardCompare($1.name!) == .orderedAscending
         }
+    }
+
+    static func matches(_ text: String, query: String) -> Bool {
+        text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
     }
 }

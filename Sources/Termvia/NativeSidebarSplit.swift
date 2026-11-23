@@ -8,14 +8,18 @@ struct NativeSidebarSplit<Sidebar: View, Content: View>: NSViewControllerReprese
     @ViewBuilder var sidebar: () -> Sidebar
     @ViewBuilder var second: () -> Content
 
+    private func sidebarContent(in environment: EnvironmentValues) -> AnyView {
+        AnyView(sidebar().environment(\.locale, environment.locale).environment(\.colorScheme, environment.colorScheme)
+            .environment(\.appearsActive, environment.appearsActive))
+    }
     func makeNSViewController(context: Context) -> NativeSidebarController {
-        let controller = NativeSidebarController(sidebar: AnyView(sidebar().environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme)),
+        let controller = NativeSidebarController(sidebar: sidebarContent(in: context.environment),
                                 content: AnyView(second().background(AppTheme.surface).environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme)))
         applyContentAppearance(controller, scheme: context.environment.colorScheme)
         return controller
     }
     func updateNSViewController(_ controller: NativeSidebarController, context: Context) {
-        controller.sidebarHost.rootView = AnyView(sidebar().environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme))
+        controller.sidebarHost.rootView = sidebarContent(in: context.environment)
         controller.contentHost.rootView = AnyView(second().background(AppTheme.surface).environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme))
         // Keep terminal/file controls in the window's normal appearance;
         // only the exposed window chrome participates in sidebar vibrancy.

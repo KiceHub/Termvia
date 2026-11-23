@@ -62,6 +62,7 @@ enum SessionPhase: Equatable {
     private var terminationTask: Task<Void, Never>?
     private(set) var wasStopped = false
     var reconnectAttempt = 0
+    private(set) var retryConnectionFailure = false
     var isAutomaticReconnect = false
     @Published var reconnectPending = false
     private(set) var connectedAt: ContinuousClock.Instant?
@@ -140,8 +141,9 @@ enum SessionPhase: Equatable {
         guard phase == .connecting else { return }
         prepared = true; connected = true; connectedAt = .now; phase = .ready; start()
     }
-    func connectionFailed(_ error: String) {
+    func connectionFailed(_ error: String, retry: Bool = false) {
         guard phase == .connecting else { return }
+        retryConnectionFailure = retry
         phase = .failed(error); disconnectAuxiliary()
         announceDisconnect()
         onExit?(self)
@@ -179,6 +181,7 @@ enum SessionPhase: Equatable {
         prepared = false; wasStopped = false; connectedAt = nil; disconnectNoticeShown = false
         initialDirectoryAttemptCompleted = fileBrowserSuspended; remoteSelection = []; listingError = nil
         terminalTitle = ""; reconnectAttempt = attempt; isAutomaticReconnect = automatic
+        retryConnectionFailure = false
         phase = .ready; start()
     }
     func stop() {

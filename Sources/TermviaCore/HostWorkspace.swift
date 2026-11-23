@@ -1,5 +1,13 @@
 import Foundation
 
+public struct FindOptions: Codable, Equatable, Sendable {
+    public var caseSensitive = false
+    public var wholeWord = false
+    public var wraps = true
+    public var regex = false
+    public init() {}
+}
+
 /// Pane placement is per host. Appearance, language and terminal preferences
 /// remain global. The sidebar page belongs to each live tab.
 public struct PaneLayout: Codable, Equatable, Sendable {
@@ -27,6 +35,7 @@ public struct HostWorkspace: Codable, Equatable, Sendable {
     public var localPath: String
     public var remotePath: String
     public var monitorSelection: MonitorSelection?
+    public var findOptions: FindOptions?
     public init(layout: WorkspaceLayout, localPath: String, remotePath: String = "~/") {
         self.layout = PaneLayout(layout); self.localPath = localPath; self.remotePath = remotePath
     }

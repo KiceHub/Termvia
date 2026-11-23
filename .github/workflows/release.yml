@@ -15,36 +15,7 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  prepare:
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: write
-      contents: write
-    steps:
-      - name: Remove intermediate release and build records
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          releases=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
-            --jq ' .[] | select(.tag_name != "v0.1.1" and .tag_name != env.RELEASE_TAG) | .id')
-          for release in $releases; do
-            gh api --method DELETE "repos/$GH_REPO/releases/$release"
-          done
-          runs=$(gh api --paginate "repos/$GH_REPO/actions/runs?per_page=100" \
-            --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID and .head_branch != \"v0.1.1\" and .status == \"completed\") | .id")
-          for run in $runs; do
-            gh api --method DELETE "repos/$GH_REPO/actions/runs/$run"
-          done
-
   build:
-    needs: prepare
-    if: ${{ !cancelled() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
     runs-on: xcode-27
     timeout-minutes: 30
     env:
@@ -108,7 +79,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      actions: write
       contents: write
     steps:
       - name: Download verified build assets
@@ -137,16 +107,3 @@ jobs:
           NOTES
           gh release create "$RELEASE_TAG" "dist/$archive" "dist/$archive.sha256" \
             --verify-tag --title "Termvia $version" --notes-file "$RUNNER_TEMP/release-notes.md"
-
-      - name: Keep published release build records
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          runs=$(gh api --paginate "repos/$GH_REPO/actions/runs?per_page=100" \
-            --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID and .head_branch != \"v0.1.1\" and .status == \"completed\") | .id")
-          for run in $runs; do
-            gh api --method DELETE "repos/$GH_REPO/actions/runs/$run"
-          done

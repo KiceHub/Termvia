@@ -329,12 +329,12 @@ import TermviaCore
             try await ConnectionVerifier.verify(prepareHost(), commands: commands, environment: environment)
         }, onCancel: { [weak self] in server.close(); Task { @MainActor in self?.close() } })
     }
-    func performSFTP(_ operation: SFTPOperation, invocation: Invocation, control: FileTransferControl? = nil) async throws -> RemoteDirectory? {
+    func performSFTP(_ operation: SFTPOperation, invocation: Invocation, control: FileTransferControl? = nil, atomicReplacement: Bool = false) async throws -> RemoteDirectory? {
         guard onClose != nil else { throw CancellationError() }
         let server = server
         return try await withTaskCancellationHandler(operation: {
             var invocation = try await prepareInvocation(invocation); invocation.environment.merge(environment) { _, new in new }
-            return try await SFTPClient().perform(operation, invocation: invocation, control: control)
+            return try await SFTPClient().perform(operation, invocation: invocation, control: control, atomicReplacement: atomicReplacement)
         }, onCancel: { [weak self] in
             server.close(); Task { @MainActor in self?.close() }
         })
@@ -356,12 +356,12 @@ import TermviaCore
             return try await SSHFileClient().resolveEntry(invocation)
         }, onCancel: { [weak self] in server.close(); Task { @MainActor in self?.close() } })
     }
-    func performSCP(local: String, remote: String, upload: Bool, invocation: Invocation, control: FileTransferControl) async throws {
+    func performSCP(local: String, remote: String, upload: Bool, invocation: Invocation, control: FileTransferControl, atomicReplacement: Bool = false) async throws {
         guard onClose != nil else { throw CancellationError() }
         let server = server
         try await withTaskCancellationHandler(operation: {
             var invocation = try await prepareInvocation(invocation); invocation.environment.merge(environment) { _, new in new }
-            try await SFTPClient().performSCP(local: local, remote: remote, upload: upload, invocation: invocation, control: control)
+            try await SFTPClient().performSCP(local: local, remote: remote, upload: upload, invocation: invocation, control: control, atomicReplacement: atomicReplacement)
         }, onCancel: { server.close(); control.cancel(); Task { @MainActor [weak self] in self?.close() } })
     }
     func performSSHFiles(_ invocation: Invocation) async throws -> RemoteDirectory {

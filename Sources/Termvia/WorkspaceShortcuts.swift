@@ -14,6 +14,14 @@ extension ShortcutModifiers {
         if contains(.control) { result.insert(.control) }; if contains(.shift) { result.insert(.shift) }
         return result
     }
+    var appKit: NSEvent.ModifierFlags {
+        var result: NSEvent.ModifierFlags = []
+        if contains(.command) { result.insert(.command) }
+        if contains(.option) { result.insert(.option) }
+        if contains(.control) { result.insert(.control) }
+        if contains(.shift) { result.insert(.shift) }
+        return result
+    }
 }
 extension AppShortcutBinding {
     init(event: NSEvent) {
@@ -40,6 +48,7 @@ extension AppModel {
         switch command {
         case .closeTab, .renameTab, .focusTerminal: return active != nil
         case .reconnect: return focusedTerminal.map { !$0.isStartPage && !$0.restarting } ?? false
+        case .findTerminal: return focusedTerminal.map { !$0.isStartPage } ?? false
         case .previousTab, .nextTab: return sessions.count > 1
         default: return true
         }
@@ -57,6 +66,7 @@ extension AppModel {
         case .previousTab: selectNext(-1)
         case .nextTab: selectNext(1)
         case .focusTerminal: focusTerminal()
+        case .findTerminal: if let activeTab = sessions.first(where: { $0.id == selected }) { showTerminalSearch(for: activeTab) }
         case .sidebar: layout.monitorVisible.toggle()
         case .panel: layout.panelVisible.toggle()
         case .largerFont: changeFont(1)
@@ -88,13 +98,16 @@ extension AppModel {
         handle(event, in: NSApp.keyWindow)
     }
     func handle(_ event: NSEvent, in keyWindow: NSWindow?) -> Bool {
-        guard event.type == .keyDown, let model, let window, keyWindow === window, event.windowNumber == window.windowNumber,
+        guard event.type == .keyDown, let model, let window, let keyWindow, event.windowNumber == keyWindow.windowNumber,
+              keyWindow === window || keyWindow === model.terminalSearch,
               window.attachedSheet == nil, NSApp.modalWindow == nil else { return false }
         let flags = event.modifierFlags.intersection([.command, .control])
         let function = event.charactersIgnoringModifiers?.unicodeScalars.first.map { (0xF704...0xF726).contains($0.value) } ?? false
         guard !flags.isEmpty || function else { return false }
         let overrides = model.settings.validated().shortcutOverrides
-        guard let command = AppShortcutCommand.allCases.first(where: { AppShortcutConfiguration.binding(for: $0, overrides: overrides).matches(event) }), model.canPerformShortcut(command) else { return false }
+        guard let command = AppShortcutCommand.allCases.first(where: { AppShortcutConfiguration.binding(for: $0, overrides: overrides).matches(event) }),
+              keyWindow === window || command == .findTerminal,
+              model.canPerformShortcut(command) else { return false }
         if !event.isARepeat { model.performShortcut(command) }
         return true
     }

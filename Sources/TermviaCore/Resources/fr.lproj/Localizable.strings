@@ -662,3 +662,18 @@
 "未保存更改将丢失，传输将取消。" = "Les modifications non enregistrées seront perdues et les transferts annulés.";
 
 "另有 %d 项" = "Et %d autres";
+"查找终端文本…" = "Rechercher dans le terminal…";
+"查找终端文本" = "Rechercher dans le terminal";
+"终端查找" = "Recherche dans le terminal";
+"上一个匹配项" = "Résultat précédent";
+"下一个匹配项" = "Résultat suivant";
+"查找" = "Rechercher";
+"查找..." = "Rechercher...";
+"区分大小写" = "Respecter la casse";
+"全字符匹配" = "Mot entier";
+"循环查找" = "Recherche en boucle";
+"正则表达式" = "Expression régulière";
+"高级查找" = "Recherche avancée";
+"替换" = "Remplacer";
+"无法解析主机地址 %@" = "Impossible de résoudre l’adresse de l’hôte %@";
+"服务器不支持安全替换文件" = "Le serveur ne prend pas en charge le remplacement sécurisé des fichiers";

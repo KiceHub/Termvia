@@ -97,7 +97,8 @@ struct GroupEditorRequest: Identifiable {
             ("archivebox", "归档"), ("square.stack.3d.up", "集群"), ("star", "星标"), ("heart", "喜爱"),
             ("flag", "旗标"), ("tag", "标签"), ("bolt", "闪电"), ("leaf", "树叶"),
             ("flame", "火焰"), ("shield", "安全"), ("lock", "锁定"), ("key", "密钥"),
-            ("gearshape", "设置"), ("terminal", "终端"), ("command", "命令"), ("wifi", "无线网络")
+            ("gearshape", "设置"), ("terminal", "终端"), ("command", "命令"), ("wifi", "无线网络"),
+            ("waveform.path.ecg", "监控"), ("doc.text", "日志"), ("memorychip", "内存"), ("clock", "时间")
         ]
     }
 }

@@ -46,15 +46,22 @@ import TermviaCore
     func file(local: String, remote: String, upload: Bool) async throws {
         _ = try commands.transfer(host, local: local, remote: remote, upload: upload, method: transfer.method)
         let lease = try transfer.authentication?.lease(); defer { lease?.close() }
+        let atomicReplacement = upload && transfer.editorOwned
         if transfer.method == .sftp {
             let operation: SFTPOperation = upload ? .uploadFile(local: local, remote: remote) : .downloadFile(remote: remote, local: local)
             let invocation = try commands.sftpSubsystem(host)
-            if let lease { _ = try await lease.performSFTP(operation, invocation: invocation, control: transfer.control) }
-            else { _ = try await SFTPClient().perform(operation, invocation: invocation, control: transfer.control) }
+            if let lease { _ = try await lease.performSFTP(operation, invocation: invocation, control: transfer.control, atomicReplacement: atomicReplacement) }
+            else { _ = try await SFTPClient().perform(operation, invocation: invocation, control: transfer.control, atomicReplacement: atomicReplacement) }
         } else {
-            let invocation = try commands.execute(host, command: "scp " + (upload ? "-t" : "-f") + " -- " + SSHRoute.shellQuote(remote))
-            if let lease { try await lease.performSCP(local: local, remote: remote, upload: upload, invocation: invocation, control: transfer.control) }
-            else { try await SFTPClient().performSCP(local: local, remote: remote, upload: upload, invocation: invocation, control: transfer.control) }
+            let command: String
+            if atomicReplacement {
+                let file = URL(fileURLWithPath: local)
+                let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                command = try SSHFileClient.editorSaveCommand(remote: remote, size: UInt64(max(0, size)))
+            } else { command = "scp " + (upload ? "-t" : "-f") + " -- " + SSHRoute.shellQuote(remote) }
+            let invocation = try commands.execute(host, command: command)
+            if let lease { try await lease.performSCP(local: local, remote: remote, upload: upload, invocation: invocation, control: transfer.control, atomicReplacement: atomicReplacement) }
+            else { try await SFTPClient().performSCP(local: local, remote: remote, upload: upload, invocation: invocation, control: transfer.control, atomicReplacement: atomicReplacement) }
         }
         lease?.confirmAuthentication()
     }

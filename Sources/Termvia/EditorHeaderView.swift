@@ -78,8 +78,7 @@ import TermviaCore
     }
     private func enabled(_ identifier: NSToolbarItem.Identifier, controller: FileEditorController) -> Bool {
         guard let document = controller.currentDocument, !document.closing else { return false }
-        if identifier == Self.refreshID { return !document.refreshing }
-        if identifier == Self.saveID { return !document.refreshing }
+        if identifier == Self.refreshID || identifier == Self.saveID { return !document.refreshing && !document.isDisconnected }
         return true
     }
     @objc private func refresh() { controller?.refreshCurrent() }
@@ -123,7 +122,8 @@ private struct EditorTab: View {
     @State private var hovered = false
     var body: some View {
         NativeSessionTab(content: AnyView(content.environment(\.colorScheme, scheme).environment(\.appearsActive, active)), actions: [
-            .init(T("保存")) { controller.select(document); controller.saveCurrent() },
+            .init(T("查找...")) { controller.select(document); controller.showFind() },
+            .init(T("保存"), enabled: !document.isDisconnected && !document.refreshing && !document.closing) { controller.select(document); controller.saveCurrent() },
             .init(T("关闭文件")) { controller.close(document) },
             .init(T("关闭其他文件")) { controller.closeOthers(document) },
             .init(T("关闭全部文件")) { controller.closeAll() }

@@ -3,14 +3,18 @@ import AppKit
 @MainActor final class EditorLineNumbers: NSRulerView, @MainActor NSTextStorageDelegate {
     private var index = EditorLineIndex()
     private var starts: [Int] { index.starts }
+    private var gutterWidth: CGFloat { max(36, CGFloat(String(starts.count).count) * 9 + 16) }
+    private var gutterUpdateScheduled = false
     weak var editor: NSTextView?
     init(scroll: NSScrollView, editor: NSTextView) {
         self.editor = editor
         super.init(scrollView: scroll, orientation: .verticalRuler)
-        clientView = editor; ruleThickness = 42; clipsToBounds = true; wantsLayer = true
+        clientView = editor; clipsToBounds = true; wantsLayer = true
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
-        rebuild(); editor.textStorage?.delegate = self
+        index.rebuild(editor.string as NSString)
+        ruleThickness = gutterWidth
+        editor.textStorage?.delegate = self
     }
     required init(coder: NSCoder) { fatalError() }
     override var isFlipped: Bool { true }
@@ -23,9 +27,17 @@ import AppKit
         index.processEdit(in: storage.string as NSString, range: range, delta: delta); updateGutter()
     }
     private func updateGutter() {
-        let width = max(36, CGFloat(String(starts.count).count) * 9 + 16)
-        if ruleThickness != width { ruleThickness = width }
         needsDisplay = true
+        guard ruleThickness != gutterWidth, !gutterUpdateScheduled else { return }
+        gutterUpdateScheduled = true
+        // Resizing the ruler can synchronously lay out glyphs. Wait until the
+        // current text-storage edit has invalidated the old layout.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            gutterUpdateScheduled = false
+            let width = gutterWidth
+            if ruleThickness != width { ruleThickness = width }
+        }
     }
     func cursorPosition(at offset: Int) -> String { index.position(at: offset, in: (editor?.string ?? "") as NSString) }
     private func line(at offset: Int) -> Int { index.line(at: offset) }

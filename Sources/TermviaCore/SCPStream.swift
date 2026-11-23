@@ -22,6 +22,32 @@ final class SCPStream {
         guard byte == 0 else { throw SSHError.invalid(try line()) }
     }
     private func sendAck() throws { try input.write(contentsOf: Data([0])) }
+    func replaceFile(local: String, remote: String) throws {
+        let url = URL(fileURLWithPath: local)
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+        guard let size = values.fileSize, size >= 0, values.isRegularFile == true, values.isSymbolicLink != true else { throw SFTPFailure.malformed }
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        guard try read(1) == Data([0]) else { throw SFTPFailure.malformed }
+        control?.beginFile(remote, size: UInt64(size))
+        var left = size
+        while left > 0 {
+            try check()
+            guard let data = try file.read(upToCount: min(left, 32768)), !data.isEmpty else { throw SFTPFailure.malformed }
+            try input.write(contentsOf: data)
+            left -= data.count; control?.advance(data.count)
+        }
+        guard try read(1) == Data([0]) else { throw SFTPFailure.malformed }
+        // EOF or cancellation before this message leaves the destination untouched.
+        try check()
+        try input.write(contentsOf: Data("commit\n".utf8))
+        // The commit is in flight. The transport gives the acknowledgement a
+        // bounded grace period if cancellation arrives here.
+        guard let acknowledgement = try output.read(upToCount: 1), !acknowledgement.isEmpty else {
+            throw SFTPFailure.closed("SCP")
+        }
+        guard acknowledgement == Data([0]) else { throw SFTPFailure.malformed }
+    }
     func transfer(local: String, remote: String, upload: Bool) throws {
         let url = URL(fileURLWithPath: local)
         if upload {

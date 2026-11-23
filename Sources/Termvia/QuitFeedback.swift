@@ -26,12 +26,15 @@ import TermviaCore
         panel.contentView = NSHostingView(rootView: QuitShortcutHint())
         // @Published sends before storing. Use its new value directly on the
         // owning actor; default-mode delivery would stall inside runModal().
-        visibility = shortcut.$showingHint.removeDuplicates().sink { [weak self] showing in self?.update(showing: showing) }
+        visibility = shortcut.$showingHint.removeDuplicates().sink { [weak self, weak shortcut] showing in
+            self?.update(showing: showing, sourceWindow: shortcut?.hintSourceWindow)
+        }
     }
-    private func update(showing: Bool) {
+    private func update(showing: Bool, sourceWindow: NSWindow?) {
         guard showing else { hide(); return }
         guard !panel.isVisible else { return }
-        guard let parent = NSApp.keyWindow?.sheetParent ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        guard var parent = sourceWindow ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        while let owner = parent.sheetParent ?? parent.parent { parent = owner }
         panel.animationBehavior = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .none : .utilityWindow
         let available = parent.screen?.visibleFrame ?? parent.frame
         let size = panel.frame.size

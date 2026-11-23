@@ -9,6 +9,36 @@ public final class SSHFileClient: Sendable {
         try commands.execute(host, command: command(operation))
     }
 
+    public static func editorSaveCommand(remote: String, size: UInt64) throws -> String {
+        guard remote.hasPrefix("/"), !remote.contains("\0") else { throw SSHError.invalid("本地和远程路径必须是绝对路径") }
+        let staging = try FilePaths.child(".termvia-editor-" + UUID().uuidString, in: (remote as NSString).deletingLastPathComponent)
+        let script = """
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
+        target=\(SSHRoute.shellQuote(remote))
+        stage=\(SSHRoute.shellQuote(staging))
+        [ -f "$target" ] && [ ! -L "$target" ] || exit 1
+        umask 077
+        mkdir "$stage" || exit 1
+        trap 'rm -f "$stage/file"; rmdir "$stage"' EXIT
+        trap 'exit 1' HUP INT TERM
+        cp -p "$target" "$stage/file" || exit 1
+        printf '\\000'
+        head -c \(size) > "$stage/file" || exit 1
+        [ "$(wc -c < "$stage/file")" -eq \(size) ] || exit 1
+        printf '\\000'
+        IFS= read -r decision && [ "$decision" = commit ] || exit 1
+        [ -f "$target" ] && [ ! -L "$target" ] || exit 1
+        case "$(uname -s)" in
+          Darwin) /usr/bin/perl -e 'rename($ARGV[0], $ARGV[1]) or die "rename: $!";' "$stage/file" "$target" || exit 1 ;;
+          Linux) mv -fT -- "$stage/file" "$target" || exit 1 ;;
+          *) exit 1 ;;
+        esac
+        if rmdir "$stage" 2>/dev/null; then trap - EXIT; fi
+        printf '\\000'
+        """
+        return "LC_ALL=C sh -c " + SSHRoute.shellQuote(script)
+    }
+
     public static func command(_ operation: SFTPOperation) throws -> String {
         func quote(_ value: String) throws -> String {
             guard !value.contains("\0") else { throw SSHError.invalid("路径包含不支持的控制字符") }

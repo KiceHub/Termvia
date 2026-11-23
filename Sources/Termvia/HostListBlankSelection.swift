@@ -23,8 +23,9 @@ struct HostListBlankSelection: NSViewRepresentable {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             uninstall()
-            guard window != nil else { return }
+            guard let window else { return }
             scheduleConfiguration()
+            NotificationCenter.default.addObserver(self, selector: #selector(sheetDidEnd(_:)), name: NSWindow.didEndSheetNotification, object: window)
             selectionObserver = NotificationCenter.default.addObserver(forName: NSTableView.selectionDidChangeNotification, object: nil, queue: .main) { [weak self] note in
                 MainActor.assumeIsolated {
                     guard let self, let table = note.object as? NSTableView, table === self.hostTable else { return }
@@ -38,10 +39,16 @@ struct HostListBlankSelection: NSViewRepresentable {
         func uninstall() {
             if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil
             if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }; selectionObserver = nil
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didEndSheetNotification, object: nil)
             rowStyleObservation = nil
             hostTable = nil; selectedRow = nil
         }
-        private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        @objc private func sheetDidEnd(_ notification: Notification) {
+            // A row may have moved or been reused while the sheet was open.
+            // Reconcile its native style once the sidebar is interactive again.
+            hostTable?.needsDisplay = true
+            scheduleConfiguration()
+        }
         func scheduleConfiguration() {
             guard !configurationPending else { return }
             configurationPending = true
@@ -53,39 +60,31 @@ struct HostListBlankSelection: NSViewRepresentable {
             }
         }
         func configureSelection() {
-            guard let root = window?.contentView else { return }
-            for table in descendants(root).compactMap({ $0 as? NSTableView }) where !(table is SidebarInsertionFeedback) && table.tableColumns.count == 1 && table.convert(table.bounds, to: self).intersects(bounds) {
-                hostTable = table
-                // SwiftUI owns the table's style. Changing it can synchronously
-                // publish SwiftUI's internal selection during its own update.
-                // Row styles are sufficient to preserve the outline selection.
-                // SwiftUI can reuse row views that still carry their previous
-                // native highlight style. Clear those alongside the table.
-                // Enumeration can ask SwiftUI to update/reuse a hosted row.
-                // Mutate its AppKit style only after that update has returned.
-                var available: [NSTableRowView] = []
-                table.enumerateAvailableRowViews { row, _ in available.append(row) }
-                for row in available where row.selectionHighlightStyle != .none { row.selectionHighlightStyle = .none }
-                let row = table.selectedRow >= 0 ? table.rowView(atRow: table.selectedRow, makeIfNecessary: false) : nil
-                if selectedRow !== row {
-                    selectedRow = row
-                    rowStyleObservation = row?.observe(\.selectionHighlightStyle, options: [.new]) { [weak self] row, _ in
-                        MainActor.assumeIsolated { if row.selectionHighlightStyle != .none { self?.scheduleConfiguration() } }
-                    }
+            var ancestor = superview
+            while let current = ancestor, !(current is HostGroupDragContainer) { ancestor = current.superview }
+            guard let table = (ancestor as? HostGroupDragContainer)?.table else { return }
+            hostTable = table
+            // SwiftUI owns the table's style and can reuse rows during
+            // enumeration. Apply the outline styling after it returns.
+            var available: [NSTableRowView] = []
+            table.enumerateAvailableRowViews { row, _ in available.append(row) }
+            for row in available where row.selectionHighlightStyle != .none { row.selectionHighlightStyle = .none }
+            let row = table.selectedRow >= 0 ? table.rowView(atRow: table.selectedRow, makeIfNecessary: false) : nil
+            if selectedRow !== row {
+                selectedRow = row
+                rowStyleObservation = row?.observe(\.selectionHighlightStyle, options: [.new]) { [weak self] row, _ in
+                    MainActor.assumeIsolated { if row.selectionHighlightStyle != .none { self?.scheduleConfiguration() } }
                 }
             }
         }
         private func handle(_ event: NSEvent) {
             guard let window, event.window === window, window.attachedSheet == nil,
-                  bounds.contains(convert(event.locationInWindow, from: nil)), let root = window.contentView else { return }
+                  bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
             configureSelection()
             scheduleConfiguration()
-            for table in descendants(root).compactMap({ $0 as? NSTableView }) where !(table is SidebarInsertionFeedback) {
-                guard let clip = table.enclosingScrollView?.contentView,
-                      clip.bounds.contains(clip.convert(event.locationInWindow, from: nil)) else { continue }
-                if table.row(at: table.convert(event.locationInWindow, from: nil)) == -1 { clear?() }
-                return
-            }
+            guard let table = hostTable, let clip = table.enclosingScrollView?.contentView,
+                  clip.bounds.contains(clip.convert(event.locationInWindow, from: nil)) else { return }
+            if table.row(at: table.convert(event.locationInWindow, from: nil)) == -1 { clear?() }
         }
     }
 }

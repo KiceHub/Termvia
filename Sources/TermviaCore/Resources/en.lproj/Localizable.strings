@@ -806,3 +806,18 @@
 "未保存更改将丢失，传输将取消。" = "Unsaved changes will be lost. Transfers will be canceled.";
 
 "另有 %d 项" = "Plus %d more";
+"查找终端文本…" = "Find Terminal Text…";
+"查找终端文本" = "Find Terminal Text";
+"终端查找" = "Terminal Find";
+"上一个匹配项" = "Previous Match";
+"下一个匹配项" = "Next Match";
+"查找" = "Find";
+"查找..." = "Find...";
+"区分大小写" = "Match Case";
+"全字符匹配" = "Match Whole Word";
+"循环查找" = "Wrap Around";
+"正则表达式" = "Regular Expression";
+"高级查找" = "Advanced Find";
+"替换" = "Replace";
+"无法解析主机地址 %@" = "Unable to resolve host address %@";
+"服务器不支持安全替换文件" = "The server does not support safe file replacement";

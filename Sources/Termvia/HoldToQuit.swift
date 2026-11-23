@@ -8,6 +8,7 @@ import TermviaCore
     @Published private(set) var showingHint = false
     @Published private(set) var holding = false
     @Published private(set) var waitingForRelease = false
+    private(set) weak var hintSourceWindow: NSWindow?
     var onQuit: (() -> Void)?
     var onCommit: (() -> Void)?
     var onCancel: (() -> Void)?
@@ -71,6 +72,7 @@ import TermviaCore
                 let now = event.timestamp
                 let doublePress = previousPress.map { now > $0 && now - $0 <= doublePressInterval } ?? false
                 task?.cancel(); keyCode = event.keyCode
+                hintSourceWindow = event.window
                 if doublePress { confirmQuit(); return nil }
                 previousPress = now; holding = true; showingHint = true
                 beginHold(event.keyCode)
@@ -128,6 +130,7 @@ import TermviaCore
         quitRequested = true
         task?.cancel(); task = nil; previousPress = nil
         holding = false; waitingForRelease = false; showingHint = false
+        hintSourceWindow = nil
         // Only discard keyboard input already queued in this application after
         // confirmation, never mouse/application events or another app's queue.
         NSApp?.discardEvents(matching: .keyDown, before: event)
@@ -138,11 +141,13 @@ import TermviaCore
         task = Task { [weak self, hintDuration] in
             do { try await Task.sleep(for: hintDuration) } catch { return }
             self?.showingHint = false; self?.task = nil
+            self?.hintSourceWindow = nil
         }
     }
     func cancel() {
         task?.cancel(); task = nil; keyCode = nil; previousPress = nil; quitRequested = false
         holding = false; waitingForRelease = false; showingHint = false
+        hintSourceWindow = nil
         onCancel?()
     }
     func uninstall() {

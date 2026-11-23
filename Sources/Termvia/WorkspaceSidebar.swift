@@ -38,21 +38,34 @@ struct HostSidebar: View {
     @ObservedObject var model: AppModel
     var staticPreview = false
     @State private var deleting: SSHHost?
-    @State private var searchCollapsedGroups = Set<String>()
-    private var groups: [HostGroup] { model.hostGroups }
-    private var rows: [HostSidebarRow] {
-        groups.flatMap { group in
-            [.group(group)] + (expansion(group.id).wrappedValue ? group.hosts.map { .host($0, group) } : [])
+    private func isExpanded(_ id: String) -> Bool {
+        model.isSearchingHosts ? !model.hostSearchCollapsedGroups.contains(id) : !model.layout.collapsedHostGroups.contains(id)
+    }
+    private func toggleGroup(_ id: String) {
+        if model.isSearchingHosts {
+            if model.hostSearchCollapsedGroups.remove(id) == nil { model.hostSearchCollapsedGroups.insert(id) }
+        } else {
+            var collapsed = Set(model.layout.collapsedHostGroups)
+            if collapsed.remove(id) == nil { collapsed.insert(id) }
+            model.layout.collapsedHostGroups = collapsed.sorted()
         }
     }
     var body: some View {
         let _ = locale.identifier
+        let groups = model.hostGroups
+        let rows: [HostSidebarRow] = groups.flatMap { group in
+            [.group(group)] + (isExpanded(group.id) ? group.hosts.map { .host($0, group) } : [])
+        }
+        let visibleHosts = rows.compactMap { row -> UUID? in
+            if case .host(let host, _) = row { return host.id }
+            return nil
+        }
         VStack(spacing: 0) {
             if staticPreview {
 #if TERMVIA_DIAGNOSTICS
                 Image(nsImage: NativeControlPreview.hostSearch()).padding(.horizontal, 10).padding(.bottom, 6)
 #endif
-                previewTree
+                previewTree(groups)
             } else {
                 NativeSearchField(text: $model.hostSearch, focusRevision: model.hostSearchFocusRevision).frame(height: 24).padding(.horizontal, 10).padding(.bottom, 6)
                 HostGroupDropArea(rows: rows, move: { source, before in
@@ -62,15 +75,15 @@ struct HostSidebar: View {
                 }) {
                     List(selection: $model.selectedHostID) {
                         ForEach(rows) { row in
-                            Group {
-                                switch row {
+                            switch row {
                                 case .group(let group):
                                     HStack(spacing: 8) {
-                                        HostGroupTitle(group: group, appearance: model.groupAppearance(group.name), expanded: expansion(group.id).wrappedValue) {
-                                            expansion(group.id).wrappedValue.toggle()
+                                        HostGroupTitle(group: group, appearance: model.groupAppearance(group.name), expanded: isExpanded(group.id)) {
+                                            toggleGroup(group.id)
                                         }.frame(maxWidth: .infinity, minHeight: 24)
                                         Button { model.presentHostEditor(group: group.name) } label: { Image(systemName: "plus") }
                                             .buttonStyle(.borderless).frame(width: 20, height: 24).help(T("新增主机"))
+                                            .accessibilityLabel(T("新增主机"))
                                             .accessibilityIdentifier("Termvia.HostGroup.Add." + group.id)
                                     }
                                     .contextMenu {
@@ -78,31 +91,17 @@ struct HostSidebar: View {
                                         Button(T("编辑分组…")) { model.presentGroupEditor(group) }
                                         Button(T("新建分组…")) { model.presentGroupEditor() }
                                     }
+                                    .selectionDisabled()
                                 case .host(let host, _):
                                     hostRow(host)
-                                }
-                            }.itemProvider {
-                                if case .host(let host, _) = row { return NSItemProvider(object: ("host:" + host.id.uuidString) as NSString) }
-                                return nil
                             }
                         }
                     }.listStyle(.sidebar).scrollContentBackground(.hidden)
                         .background(HostListBlankSelection { model.selectedHostID = nil })
                         .contextMenu(forSelectionType: UUID.self) { ids in
                             if let host = model.hosts.first(where: { ids.contains($0.id) }) {
-                                Button(T("连接")) { model.connect(host) }
-                                Button(T("编辑…")) { model.presentHostEditor(host) }
-                                Button(T("复制")) { do { try model.copyHost(host) } catch { model.error = error.localizedDescription } }
-                                Menu(T("主机图标")) {
-                                    Button(T("自动")) { model.setHostIcon(nil, host: host) }
-                                    ForEach(HostSystemIcon.allCases) { icon in
-                                        Button { model.setHostIcon(icon.rawValue, host: host) } label: { Label { Text(icon.title) } icon: { HostIcon(icon: icon.rawValue) } }
-                                    }
-                                }
-                                Button(T("主机指纹…")) { model.hostTrustToInspect = host }
-                                Divider()
-                                Button(T("删除…"), role: .destructive) { deleting = host }
-                            } else {
+                                hostActions(host)
+                            } else if ids.isEmpty {
                                 Button(T("新增主机")) { model.presentHostEditor() }
                                 Button(T("新建分组…")) { model.presentGroupEditor() }
                             }
@@ -110,12 +109,19 @@ struct HostSidebar: View {
                             if ids.count == 1, let host = model.hosts.first(where: { ids.contains($0.id) }) { model.connect(host) }
                         }
                         .overlay {
-                            if groups.isEmpty { EmptyPane(symbol: "server.rack", title: model.hosts.isEmpty ? "无主机" : "没有匹配的主机", detail: "") }
+                            if groups.isEmpty {
+                                EmptyPane(symbol: "server.rack", title: model.hosts.isEmpty ? "无主机" : "没有匹配的主机", detail: "")
+                                    .allowsHitTesting(false)
+                            }
                         }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onChange(of: model.hostSearch) { _, _ in searchCollapsedGroups = [] }
+        .onChange(of: visibleHosts, initial: true) { _, visible in
+            if !staticPreview, let selected = model.selectedHostID, !visible.contains(selected) {
+                model.selectedHostID = nil
+            }
+        }
         .compactAlert(T("删除此主机配置？"), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                       message: deleting.map { $0.name + "\n" + $0.address } ?? "", actions: [
             .init(T("删除")) {
@@ -128,23 +134,31 @@ struct HostSidebar: View {
         ])
     }
     private func hostRow(_ host: SSHHost) -> some View {
-        SavedHostRow(host: host).padding(.leading, 14).tag(host.id)
+        SavedHostRow(host: host).padding(.leading, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .contextMenu { hostActions(host) }
+            .itemProvider { NSItemProvider(object: ("host:" + host.id.uuidString) as NSString) }
+            .tag(host.id)
             .listRowBackground(HostSelectionOutline(selected: model.selectedHostID == host.id))
     }
-    private func expansion(_ id: String) -> Binding<Bool> {
-        Binding(get: {
-            model.hostSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? !model.layout.collapsedHostGroups.contains(id) : !searchCollapsedGroups.contains(id)
-        }, set: { expanded in
-            if !model.hostSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                if expanded { searchCollapsedGroups.remove(id) } else { searchCollapsedGroups.insert(id) }
-                return
+    @ViewBuilder private func hostActions(_ host: SSHHost) -> some View {
+        Button(T("连接")) { model.connect(host) }
+        Button(T("编辑…")) { model.presentHostEditor(host) }
+        Button(T("复制")) { do { try model.copyHost(host) } catch { model.error = error.localizedDescription } }
+        Menu(T("主机图标")) {
+            Button(T("自动")) { model.setHostIcon(nil, host: host) }
+            ForEach(HostSystemIcon.allCases) { icon in
+                Button { model.setHostIcon(icon.rawValue, host: host) } label: {
+                    Label { Text(icon.title) } icon: { HostIcon(icon: icon.rawValue) }
+                }
             }
-            var collapsed = Set(model.layout.collapsedHostGroups)
-            if expanded { collapsed.remove(id) } else { collapsed.insert(id) }
-            model.layout.collapsedHostGroups = collapsed.sorted()
-        })
+        }
+        Button(T("主机指纹…")) { model.hostTrustToInspect = host }
+        Divider()
+        Button(T("删除…"), role: .destructive) { deleting = host }
     }
-    private var previewTree: some View {
+    private func previewTree(_ groups: [HostGroup]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(groups) { group in
                 HStack(spacing: HostGroupTitleGrid.spacing) {

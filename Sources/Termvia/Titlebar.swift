@@ -20,6 +20,7 @@ import Combine
     init(model: AppModel, window: NSWindow) {
         self.model = model
         self.window = window
+        model.workspaceWindow = window
         model.authenticationPrompts.window = window
         super.init()
         shortcutRouter = WorkspaceShortcutRouter(model: model, window: window)
@@ -177,10 +178,12 @@ struct TitlebarSessions: View {
     @ObservedObject var model: AppModel
     var body: some View {
         let _ = uiLocale.identifier
+        let findShortcut = AppShortcutConfiguration.binding(for: .findTerminal, overrides: model.settings.shortcutOverrides)
         CompactTabStrip(items: model.sessions, id: \.id, selected: model.selected, move: model.reorderTabs) { session in
             SessionTab(session: session, selected: model.selected == session.id,
                        select: { model.selected = session.id; model.focusTerminal() }, close: { model.close(session) },
                        reconnect: { model.reconnect(model.tabTerminal(session)) }, rename: { model.presentTabRename(session) },
+                       findAction: .init(T("查找..."), shortcut: findShortcut) { model.showTerminalSearch(for: session) },
                        splitActions: model.splitActions(for: session), hostIcon: model.tabIcon(for: model.tabTerminal(session)),
                        doubleClickCloses: model.settings.doubleClickClosesTab, statusSession: model.tabTerminal(session))
         } trailing: {

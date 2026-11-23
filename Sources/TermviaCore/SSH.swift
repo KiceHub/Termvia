@@ -16,6 +16,8 @@ public struct SSHHost: Codable, Identifiable, Equatable, Sendable {
     public var upstream: SSHUpstream? = nil
     /// Runtime transport, never persisted or accepted from a host document.
     public var transportCommand: String? = nil
+    public var connectionEndpoint: String? = nil
+    public var connectionAddress: String { connectionEndpoint ?? address }
     private enum CodingKeys: String, CodingKey { case id, name, address, user, port, identity, customIcon, detectedSystem, detectedSystemVersion, group, authentication, credentialID, fileProtocol, upstream }
     public var fileProtocol: SSHCommands.FileProtocol? = nil
     public init(name: String, address: String, user: String, port: Int = 22, identity: String = "") {
@@ -66,7 +68,13 @@ public struct SSHCommands: Sendable {
                     "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=\(interactive ? "ask" : "yes")",
                     "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=\(keepAliveInterval)", "-o", "ServerAliveCountMax=3", "-o", "TCPKeepAlive=no",
                     "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no"]
-        if let transport = host.transportCommand { args += ["-o", "ProxyCommand=" + transport] }
+        if let transport = host.transportCommand {
+            args += ["-o", "ProxyCommand=" + transport]
+        } else if let address = host.connectionEndpoint {
+            // Keep the configured SSH name for known_hosts and certificate principals.
+            let endpoint = SSHRoute.shellQuote(address.replacingOccurrences(of: "%", with: "%%"))
+            args += ["-o", "ProxyCommand=/usr/bin/nc -n -G 10 -- \(endpoint) \(host.port)"]
+        }
         if suppressWarnings { args += ["-o", "WarnWeakCrypto=no", "-o", "LogLevel=ERROR"] }
         if !interactive { args += ["-o", "BatchMode=\(useAskpass ? "no" : "yes")"] }
         args += ["-o", "NumberOfPasswordPrompts=3"]
@@ -87,8 +95,9 @@ public struct SSHCommands: Sendable {
         }
         return args
     }
-    private func destination(_ host: SSHHost) -> String {
-        "\(host.user)@\(host.address.contains(":") ? "[\(host.address)]" : host.address)"
+    private func destination(_ host: SSHHost, fileOperand: Bool = false) -> String {
+        let address = host.address
+        return "\(host.user)@\(fileOperand && address.contains(":") ? "[\(address)]" : address)"
     }
     public func terminal(_ host: SSHHost) throws -> Invocation {
         Invocation(executable: "/usr/bin/ssh", arguments: try options(host, interactive: true) + ["-tt", "-p", String(host.port), "--", destination(host)])
@@ -111,19 +120,19 @@ public struct SSHCommands: Sendable {
         return "\"" + path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
     public func listing(_ host: SSHHost, path: String) throws -> Invocation {
-        Invocation(executable: "/usr/bin/sftp", arguments: try options(host, interactive: false) + ["-P", String(host.port), "-b", "-", "--", destination(host)], input: Data("ls -la \(try Self.sftpQuote(path))\n".utf8))
+        Invocation(executable: "/usr/bin/sftp", arguments: try options(host, interactive: false) + ["-P", String(host.port), "-b", "-", "--", destination(host, fileOperand: true)], input: Data("ls -la \(try Self.sftpQuote(path))\n".utf8))
     }
     public enum FileProtocol: String, Codable, CaseIterable, Sendable { case sftp = "SFTP", scp = "SCP" }
     public func transfer(_ host: SSHHost, local: String, remote: String, upload: Bool, method: FileProtocol) throws -> Invocation {
         guard local.hasPrefix("/"), remote.hasPrefix("/"), !remote.contains("\n"), !remote.contains("\r"), !remote.contains("\0"), !local.contains("\n"), !local.contains("\r"), !local.contains("\0") else { throw SSHError.invalid("本地和远程路径必须是绝对路径") }
         if method == .sftp {
             let command = upload ? "put \(try Self.sftpQuote(local)) \(try Self.sftpQuote(remote))" : "get \(try Self.sftpQuote(remote)) \(try Self.sftpQuote(local))"
-            return Invocation(executable: "/usr/bin/sftp", arguments: try options(host, interactive: false) + ["-P", String(host.port), "-b", "-", "--", destination(host)], input: Data((command + "\n").utf8))
+            return Invocation(executable: "/usr/bin/sftp", arguments: try options(host, interactive: false) + ["-P", String(host.port), "-b", "-", "--", destination(host, fileOperand: true)], input: Data((command + "\n").utf8))
         }
         // Legacy SCP sends the remote operand through a remote shell; quote it independently.
         let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
         let quotedRemote = remote.unicodeScalars.map { safe.contains($0) ? String($0) : "\\" + String($0) }.joined()
-        let remoteOperand = destination(host) + ":" + quotedRemote
+        let remoteOperand = destination(host, fileOperand: true) + ":" + quotedRemote
         return Invocation(executable: "/usr/bin/scp", arguments: try options(host, interactive: false) + ["-O", "-P", String(host.port), "--"] + (upload ? [local, remoteOperand] : [remoteOperand, local]))
     }
 }

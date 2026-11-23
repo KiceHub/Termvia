@@ -9,14 +9,18 @@ struct HostGroupDropArea<Content: View>: NSViewRepresentable {
     let moveHost: (UUID, Int) -> Bool
     @ViewBuilder let content: () -> Content
 
+    private func hostedContent(in environment: EnvironmentValues) -> AnyView {
+        AnyView(content().environment(\.locale, environment.locale).environment(\.colorScheme, environment.colorScheme)
+            .environment(\.appearsActive, environment.appearsActive))
+    }
     func makeNSView(context: Context) -> HostGroupDragContainer {
-        let view = HostGroupDragContainer(content: AnyView(content().environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme)))
+        let view = HostGroupDragContainer(content: hostedContent(in: context.environment))
         view.rows = rows; view.move = move; view.moveHost = moveHost
         return view
     }
     func updateNSView(_ view: HostGroupDragContainer, context: Context) {
         view.rows = rows; view.move = move; view.moveHost = moveHost
-        view.host.rootView = AnyView(content().environment(\.locale, context.environment.locale).environment(\.colorScheme, context.environment.colorScheme))
+        view.host.rootView = hostedContent(in: context.environment)
     }
 }
 
@@ -116,18 +120,18 @@ final class HostGroupDragContainer: NSView {
         insertionFeedback.show(at: local, width: table.bounds.width, style: table.style, dragging: info)
         restoreSourceFeedback(dragging: info)
     }
-    private func update(_ sender: NSDraggingInfo) -> NSDragOperation {
+    private func update(_ sender: NSDraggingInfo, autoscroll: Bool) -> NSDragOperation {
         guard let table, source(sender) != nil || hostID(sender) != nil else { clearBoundary(); return [] }
         if let name = source(sender) { beginGroupDrag(name) }
         // Keep long lists scrollable while the whole block is being dragged.
-        if let clip = table.enclosingScrollView?.contentView {
+        if autoscroll, let clip = table.enclosingScrollView?.contentView {
             let point = clip.convert(sender.draggingLocation, from: nil)
             if point.y < clip.bounds.minY + 24 { table.scroll(NSPoint(x: 0, y: max(0, clip.bounds.minY - 8))) }
             else if point.y > clip.bounds.maxY - 24 { table.scroll(NSPoint(x: 0, y: clip.bounds.minY + 8)) }
         }
         let point = table.convert(sender.draggingLocation, from: nil)
         if hostID(sender) != nil {
-            let operation: NSDragOperation = sender.draggingSourceOperationMask.contains(.copy) ? .copy : .move
+            let operation: NSDragOperation = sender.draggingSourceOperationMask.contains(.move) ? .move : .copy
             guard sender.draggingSourceOperationMask.contains(operation), let index = hostInsertionIndex(at: point, in: table) else {
                 clearBoundary(); return []
             }
@@ -144,13 +148,13 @@ final class HostGroupDragContainer: NSView {
         showInsertion(at: index, in: table, dragging: sender)
         return .move
     }
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { update(sender) }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { update(sender) }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { update(sender, autoscroll: true) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { update(sender, autoscroll: true) }
     override func draggingExited(_ sender: NSDraggingInfo?) { clearBoundary() }
-    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !update(sender).isEmpty }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !update(sender, autoscroll: false).isEmpty }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         defer { endGroupDrag() }
-        guard !update(sender).isEmpty else { return false }
+        guard !update(sender, autoscroll: false).isEmpty else { return false }
         if let id = hostID(sender), let index = hostDropIndex { return moveHost?(id, index) ?? false }
         guard let source = source(sender), let boundary = dropBoundary else { return false }
         if boundary.before == source { return true }

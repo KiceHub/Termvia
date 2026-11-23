@@ -6,6 +6,7 @@ import TermviaCore
 struct WorkspaceView: View {
     @Environment(\.locale) private var uiLocale
     @ObservedObject var model: AppModel
+    @State private var savedHost: SSHHost?
     var body: some View {
         let _ = uiLocale.identifier
         let key = model.workspaceKey
@@ -66,7 +67,11 @@ struct WorkspaceView: View {
         .sheet(item: $model.splitRequest) { SplitHostPicker(model: model, request: $0) }
         .sheet(item: $model.hostTrustToInspect, onDismiss: { model.hostTrustWarning = nil; model.focusTerminal() }) { HostTrustView(model: model, host: $0) }
         .sheet(item: $model.groupEditor) { GroupEditor(model: model, group: $0.group) }
-        .sheet(isPresented: $model.hostManagerPresented, onDismiss: { model.hostCopyDraft = nil; model.focusTerminal() }) { HostManager(model: model, host: model.hostToEdit, defaultGroup: model.newHostGroup, draft: model.hostCopyDraft).id(model.hostToEdit?.id ?? model.hostCopyDraft?.host.id) }
+        .sheet(isPresented: $model.hostManagerPresented, onDismiss: finishHostEditor) {
+            HostManager(model: model, host: model.hostToEdit, defaultGroup: model.newHostGroup, draft: model.hostCopyDraft) {
+                savedHost = $0
+            }.id(model.hostToEdit?.id ?? model.hostCopyDraft?.host.id)
+        }
         .compactAlert(T("重命名标签页"), isPresented: Binding(get: { model.tabRenameTarget != nil }, set: { if !$0 { model.tabRenameTarget = nil } }),
                       message: T("留空恢复默认名称"), input: .init(placeholder: T("名称"), text: $model.tabNameDraft), actions: [
             .init(T("保存")) { model.confirmTabRename() },
@@ -75,8 +80,22 @@ struct WorkspaceView: View {
         .compactAlert(T("操作失败"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } }), message: model.error ?? "", actions: [
             .init(T("确定")) { model.error = nil }
         ])
-        .onChange(of: model.hostManagerPresented) { _, showing in if !showing { model.focusTerminal() } }
         .workspaceEnvironment(model: model)
+    }
+    private func finishHostEditor() {
+        model.hostCopyDraft = nil
+        if let savedHost {
+            self.savedHost = nil
+            let groupID = HostGroupAppearance.key(for: savedHost.group)
+            model.hostSearchCollapsedGroups.remove(groupID)
+            model.layout.collapsedHostGroups.removeAll { $0 == groupID }
+            if !model.hostGroups.contains(where: { $0.hosts.contains { $0.id == savedHost.id } }) {
+                model.hostSearch = ""
+            }
+            model.showHosts()
+        } else {
+            model.focusTerminal()
+        }
     }
     @ViewBuilder private var files: some View {
         if model.active?.isLocalTerminal == true {

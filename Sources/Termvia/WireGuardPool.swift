@@ -68,7 +68,7 @@ import TermviaCore
             }
             try Task.checkCancellation()
             guard !closed, entries[key] === entry else { throw CancellationError() }
-            let command = [helper.path, "--connect", entry.socket.path, target.address, String(target.port)].map { SSHRoute.shellQuote($0.replacingOccurrences(of: "%", with: "%%")) }.joined(separator: " ")
+            let command = [helper.path, "--connect", entry.socket.path, target.connectionAddress, String(target.port)].map { SSHRoute.shellQuote($0.replacingOccurrences(of: "%", with: "%%")) }.joined(separator: " ")
             return Lease(command: command) { [weak self, weak entry] in
                 guard let entry else { return }; self?.release(key: key, entry: entry, token: token)
             }

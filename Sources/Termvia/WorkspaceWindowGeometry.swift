@@ -6,9 +6,7 @@ import AppKit
 
     static func configure(_ window: NSWindow, autosaveName: NSWindow.FrameAutosaveName?) {
         window.contentMinSize = minimumContentSize
-        // Setting the name restores its saved frame as well as enabling saving.
-        // SwiftUI scene restoration is disabled so this is the only owner.
-        if let autosaveName { window.setFrameAutosaveName(autosaveName) }
+        if let autosaveName { window.setFrameUsingName(autosaveName) }
         // SwiftUI uses fullSizeContentView: frameRect(forContentRect:) includes
         // the titlebar in "content", while the workspace needs the usable area.
         let layout = window.contentLayoutRect

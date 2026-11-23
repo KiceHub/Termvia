@@ -39,7 +39,7 @@ public struct AppShortcutBinding: Codable, Equatable, Sendable {
     }
 }
 public enum AppShortcutCommand: String, CaseIterable, Identifiable, Sendable {
-    case newTab, localTerminal, showHosts, newHost, closeTab, reconnect, renameTab, previousTab, nextTab, focusTerminal, sidebar, panel, largerFont, smallerFont, defaultFont
+    case newTab, localTerminal, showHosts, newHost, closeTab, reconnect, renameTab, previousTab, nextTab, focusTerminal, findTerminal, sidebar, panel, largerFont, smallerFont, defaultFont
     public var id: String { rawValue }
     public var customizable: Bool { self != .closeTab }
     public var title: String {
@@ -54,6 +54,7 @@ public enum AppShortcutCommand: String, CaseIterable, Identifiable, Sendable {
         case .previousTab: return T("上一个会话")
         case .nextTab: return T("下一个会话")
         case .focusTerminal: return T("聚焦终端")
+        case .findTerminal: return T("查找终端文本…")
         case .sidebar: return T("显示侧栏")
         case .panel: return T("显示底部面板")
         case .largerFont: return T("增大终端字体")
@@ -73,6 +74,7 @@ public enum AppShortcutCommand: String, CaseIterable, Identifiable, Sendable {
         case .previousTab: return .init("[", modifiers: [.command, .shift])
         case .nextTab: return .init("]", modifiers: [.command, .shift])
         case .focusTerminal: return .init("t", modifiers: [.command, .option])
+        case .findTerminal: return .init("f")
         case .sidebar: return .init("m", modifiers: [.command, .option])
         case .panel: return .init("b", modifiers: [.command, .option])
         case .largerFont: return .init("+")
@@ -83,7 +85,13 @@ public enum AppShortcutCommand: String, CaseIterable, Identifiable, Sendable {
 }
 public enum AppShortcutConfiguration {
     public static func binding(for command: AppShortcutCommand, overrides: [String: AppShortcutBinding]) -> AppShortcutBinding {
-        command.customizable ? overrides[command.rawValue] ?? command.defaultBinding : command.defaultBinding
+        if command.customizable, let custom = overrides[command.rawValue] { return custom }
+        // Older settings could assign Command-F before terminal find existed.
+        if command == .findTerminal, overrides.contains(where: { key, value in
+            guard let owner = AppShortcutCommand(rawValue: key), owner != .findTerminal, owner.customizable else { return false }
+            return value.equivalent(to: command.defaultBinding)
+        }) { return .disabled }
+        return command.defaultBinding
     }
     public static func isProtected(_ binding: AppShortcutBinding, command: AppShortcutCommand) -> Bool {
         let protected = ["q", ",", "c", "v", "x", "a", "z", "h", "m", "\t"].map { AppShortcutBinding($0) }
