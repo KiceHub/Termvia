@@ -53,8 +53,7 @@ enum PPKConverter {
         try Data((passphrase + "\n").utf8).write(to: old); try Data("\n".utf8).write(to: empty)
         for file in [source, old, empty] { try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
         defer { for file in [source, old, empty] { try? FileManager.default.removeItem(at: file) } }
-        var invocation = Invocation(executable: helper.path, arguments: [source.path, "-O", "private-openssh-new", "-o", identity.key.path, "--old-passphrase", old.path, "--new-passphrase", empty.path])
-        invocation.environment["PUTTYSEED"] = directory.appendingPathComponent("seed").path
+        let invocation = Invocation(executable: helper.path, arguments: [source.path, "-O", "private-openssh-new", "-o", identity.key.path, "--old-passphrase", old.path, "--new-passphrase", empty.path])
         let result = try await ProcessRunner().run(invocation)
         try Task.checkCancellation()
         guard result.status == 0 else { throw SSHError.invalid(T("PPK 私钥或口令无效")) }

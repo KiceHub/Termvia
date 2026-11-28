@@ -20,11 +20,12 @@ extension AppModel {
     func transferUploadFile(_ transfer: Transfer) async throws -> Int {
         let connection = TransferConnection(commands: commands, transfer: transfer)
         let parent = (transfer.remote as NSString).deletingLastPathComponent
-        if let entry = try await connection.directory(parent).entries.first(where: { $0.path == transfer.remote }) {
+        let entry = try await connection.directory(parent).entries.first(where: { $0.path == transfer.remote })
+        if let entry {
             guard entry.kind == .file else { throw SSHError.invalid(T("目标类型不同或为符号链接：%@", transfer.remote)) }
             guard try await approveConflict(transfer, path: transfer.host.name + ":" + transfer.remote, directory: false) else { throw TransferSkipped() }
         }
-        try await connection.file(local: transfer.local, remote: transfer.remote, upload: true)
+        try await connection.file(local: transfer.local, remote: transfer.remote, upload: true, overwrite: entry != nil)
         return 0
     }
     func transferFolder(_ transfer: Transfer) async throws -> Int {
@@ -105,7 +106,7 @@ extension AppModel {
             _ = try await connection.directory(transfer.remote, operations: createDirs[start..<min(start + 64, createDirs.count)].map { .makeDirectory(transfer.remote + "/" + $0) })
         }
         // Refresh existing parents after the dialogs; never rely on a browser cache.
-        var finalFiles: [String] = []
+        var finalFiles: [String] = [], overwriteDestinations = Set<String>()
         let groupedFiles = Dictionary(grouping: files) { ($0 as NSString).deletingLastPathComponent }
         for directory in groupedFiles.keys.sorted() {
             let current = existingDirs.contains(directory) ? try await index(directory) : [:]
@@ -115,11 +116,12 @@ extension AppModel {
                     if !approvedFiles.contains(path) {
                         guard try await approveConflict(transfer, path: transfer.host.name + ":" + entry.path, directory: false) else { skipped += 1; continue }
                     }
+                    overwriteDestinations.insert(entry.path)
                 }
                 finalFiles.append(path)
             }
         }
-        try await connection.files(finalFiles, localRoot: local)
+        try await connection.files(finalFiles, localRoot: local, approvedOverwrites: overwriteDestinations)
         return skipped
     }
     private func mergeDownload(_ transfer: Transfer, tree: TransferTree, connection: TransferConnection) async throws -> Int {

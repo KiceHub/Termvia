@@ -8,11 +8,11 @@ Third-party components and operating-system marks retain their own licenses
 and ownership. The Apache License does not relicense these assets or grant
 rights to third-party names and trademarks.
 
-SwiftTerm 1.99.2: MIT license, Miguel de Icaza and the other copyright holders
+SwiftTerm (revision e1ff7f7b): MIT license, Miguel de Icaza and the other copyright holders
 listed in SwiftTerm-LICENSE.txt, included in the packaged application's Resources.
 
-PuTTY 0.85 (puttygen): MIT license, Simon Tatham and contributors.
-See PuTTY-LICENSE.txt in the packaged application's Resources.
+Rust helper dependency licenses and the Rust standard library attribution
+are bundled in Resources/Rust-Licenses.
 
 Host operating-system icons:
 - Tux: Larry Ewing (created using The GIMP), Garrett LeSage, and IFo Hancroft;
@@ -34,7 +34,3 @@ Host operating-system icons:
 Detailed icon attribution and license terms are included in
 Sources/Termvia/Resources/HostIcons/NOTICE.md and sources.json, and bundled
 with the application. Modified Debian icons retain CC-BY-SA-3.0.
-
-WireGuard userspace transport: wireguard-go, MIT licence, WireGuard LLC.
-gVisor netstack: Apache-2.0, The gVisor Authors.
-Additional Go dependency licences are bundled in Resources/WireGuard-Licenses.

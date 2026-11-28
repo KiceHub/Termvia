@@ -3,6 +3,8 @@ import AppKit
 /// Recreate only native toolbar controls when appearance changes. AppKit's
 /// shared glass caches its content tint during transitions; a fresh native
 /// platter uses the new appearance immediately. Keep tab hosting views intact.
+/// Each toolbar needs its own identifier because AppKit synchronizes item edits
+/// between toolbars sharing an identifier.
 @MainActor final class ToolbarAppearanceRefresh {
     private var observation: NSKeyValueObservation?
     init(toolbar: NSToolbar, preserving: Set<NSToolbarItem.Identifier>) {

@@ -1,0 +1,6 @@
+[workspace]
+members = ["ppk", "wireguard"]
+resolver = "3"
+
+[profile.release]
+strip = "debuginfo"

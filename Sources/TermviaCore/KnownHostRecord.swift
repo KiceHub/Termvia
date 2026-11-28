@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 /// One trust record, independent of saved host configurations. Its identity
@@ -30,14 +31,61 @@ public struct KnownHostRecord: Identifiable, Equatable, Sendable {
     /// Resolve hashed entries only against addresses the user has saved. The
     /// original name of an orphaned hash cannot be recovered.
     public func matches(address: String, port: Int) -> Bool {
-        let name = port == 22 ? address : "[\(address)]:\(port)"
+        matches(name: SSHHost.knownHostsKey(address: address, port: port))
+    }
+
+    func matches(name: String) -> Bool {
         if !isHashed { return hosts.split(separator: ",").contains { $0.caseInsensitiveCompare(name) == .orderedSame } }
-        let parts = hosts.split(separator: "|", omittingEmptySubsequences: false)
-        guard parts.count == 4, let salt = Data(base64Encoded: String(parts[2])),
-              let expected = Data(base64Encoded: String(parts[3])), salt.count == 20, expected.count == 20 else { return false }
+        guard let (salt, expected) = Self.hashedName(hosts) else { return false }
         return [name, name.lowercased()].contains {
             HMAC<Insecure.SHA1>.isValidAuthenticationCode(expected, authenticating: Data($0.utf8), using: SymmetricKey(data: salt))
         }
+    }
+
+    func matchesHostPattern(_ name: String) -> Bool {
+        Self.matchesHostPattern(hosts, name: name)
+    }
+
+    static func matchesHostPattern(_ hosts: String, name: String) -> Bool {
+        func folded(_ bytes: String.UTF8View) -> String {
+            String(decoding: bytes.map { (65...90).contains($0) ? $0 + 32 : $0 }, as: UTF8.self)
+        }
+        let name = folded(name.utf8)
+        if hosts.hasPrefix("|1|") {
+            guard let (salt, digest) = hashedName(hosts) else { return false }
+            return HMAC<Insecure.SHA1>.isValidAuthenticationCode(digest, authenticating: Data(name.utf8), using: SymmetricKey(data: salt))
+        }
+        var included = false
+        for alias in hosts.split(separator: ",") {
+            let negated = alias.hasPrefix("!")
+            let field = negated ? alias.dropFirst() : alias
+            guard field.utf8.count < 1023 else { return false }
+            // OpenSSH's host globs support '*' and '?'. Brackets are literal
+            // in host-and-port fields, so escape bracket classes for fnmatch.
+            let pattern = folded(String(field).utf8)
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "[", with: "\\[")
+                .replacingOccurrences(of: "]", with: "\\]")
+            if fnmatch(pattern, name, 0) == 0 {
+                if negated { return false }
+                included = true
+            }
+        }
+        return included
+    }
+
+    func rehashName(_ name: String) -> String? {
+        guard let (salt, _) = Self.hashedName(hosts) else { return nil }
+        let digest = HMAC<Insecure.SHA1>.authenticationCode(for: Data(name.utf8), using: SymmetricKey(data: salt))
+        return "|1|\(salt.base64EncodedString())|\(Data(digest).base64EncodedString())"
+    }
+
+    private static func hashedName(_ hosts: String) -> (Data, Data)? {
+        guard hosts.hasPrefix("|1|") else { return nil }
+        let parts = hosts.split(separator: "|", omittingEmptySubsequences: false)
+        guard parts.count == 4, let salt = Data(base64Encoded: String(parts[2])),
+              let digest = Data(base64Encoded: String(parts[3])), salt.count == 20, digest.count == 20 else { return nil }
+        return (salt, digest)
     }
 }
 
@@ -73,12 +121,13 @@ actor KnownHostsRecords {
         }
     }
     func forget(_ record: KnownHostRecord, at url: URL) throws {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        let text = try String(contentsOf: url, encoding: .utf8)
-        let lines = text.components(separatedBy: "\n")
-        let remaining = lines.filter { KnownHostRecord(line: $0)?.id != record.id }
-        guard remaining.count != lines.count else { return }
-        try Data(remaining.joined(separator: "\n").utf8).write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        _ = try forget(record, migrating: [], at: url)
+    }
+    func forget(_ record: KnownHostRecord, migrating hosts: [SSHHost], at url: URL) throws -> [String: String] {
+        let text = try KnownHostsStore.read(url)
+        let remaining = text.components(separatedBy: "\n").filter { KnownHostRecord(line: $0)?.id != record.id }.joined(separator: "\n")
+        let result = KnownHostsStore.migration(of: remaining, for: hosts)
+        if result.text != text { try KnownHostsStore.write(result.text, to: url) }
+        return result.ambiguous
     }
 }

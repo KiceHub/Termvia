@@ -3,7 +3,7 @@ import Darwin
 
 /// Local, unencrypted secrets. Only the current user can access the directory
 /// (0700) and files (0600); no Keychain or additional password is involved.
-public struct FileSecretStore: CredentialSecretStore {
+public struct FileSecretStore: EnumerableCredentialSecretStore {
     public let directory: URL
     public init(directory: URL) { self.directory = directory }
 
@@ -30,6 +30,23 @@ public struct FileSecretStore: CredentialSecretStore {
             try makePrivate(fd, mode: 0o700)
             return fd
         } catch { Darwin.close(fd); throw error }
+    }
+    public func identifiers() throws -> [UUID] {
+        guard let fd = try openDirectory(create: false) else { return [] }
+        guard let stream = fdopendir(fd) else { let error = systemError(); Darwin.close(fd); throw error }
+        defer { closedir(stream) }
+        var ids: [UUID] = []
+        while true {
+            errno = 0
+            guard let entry = readdir(stream) else {
+                if errno != 0 { throw systemError() }
+                return ids
+            }
+            let name = withUnsafeBytes(of: &entry.pointee.d_name) { bytes in
+                String(decoding: bytes.prefix(Int(entry.pointee.d_namlen)), as: UTF8.self)
+            }
+            if let id = UUID(uuidString: name) { ids.append(id) }
+        }
     }
     public func read(_ id: UUID) throws -> String? {
         guard let parent = try openDirectory(create: false) else { return nil }

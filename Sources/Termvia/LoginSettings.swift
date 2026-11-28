@@ -6,8 +6,21 @@ struct LoginSettings: View {
     @State private var editingCredential: LoginCredential?
     @State private var credentialPresented = false
     @State private var editingHost: SSHHost?
+    @State private var confirmLocalStorage = false
+    @State private var storageMessage: String?
     var body: some View {
         Form {
+            if model.canChangeKeychainStorage {
+                Section {
+                    Toggle(T("使用 macOS 钥匙串"), isOn: Binding(get: { model.keychainChoice == true }, set: { enabled in
+                        if enabled { setKeychainStorage(true) } else { confirmLocalStorage = true }
+                    }))
+                    .disabled(model.changingKeychainStorage)
+                    .accessibilityIdentifier("Termvia.Login.KeychainStorage")
+                } footer: {
+                    Text(T("适用于已保存的 SSH 和代理密码、私钥口令及 WireGuard 密钥。关闭时使用未加密的本机文件。"))
+                }
+            }
             Section(T("共享登录信息")) {
                 ForEach(model.credentials) { credential in
                     HStack {
@@ -45,5 +58,18 @@ struct LoginSettings: View {
                 CredentialEditor(model: model, profile: editingCredential, user: "root", method: .password, identity: "") { _ in }
             }
             .sheet(item: $editingHost) { HostManager(model: model, host: $0) }
+            .compactAlert(T("将登录信息移到本机文件？"), isPresented: $confirmLocalStorage,
+                          message: T("关闭后，已保存的密码和密钥将移到未加密的本机文件。"), actions: [
+                .init(T("关闭钥匙串保存")) { setKeychainStorage(false) },
+                .init(T("取消"), role: .cancel) {}
+            ])
+            .compactAlert(T("钥匙串保存"), isPresented: Binding(get: { storageMessage != nil }, set: { if !$0 { storageMessage = nil } }),
+                          message: storageMessage ?? "", actions: [.init(T("确定")) {}])
+    }
+    private func setKeychainStorage(_ enabled: Bool) {
+        Task {
+            do { storageMessage = try await model.setKeychainStorage(enabled) }
+            catch { storageMessage = error.localizedDescription }
+        }
     }
 }

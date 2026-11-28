@@ -40,7 +40,7 @@ import TermviaCore
     @objc func closeWorkspace(_ sender: Any?) { requestWindowClose() }
     func requestWindowClose() {
         guard let model, let window = mainWindow, !terminationPending, closeConfirmation == nil else { return }
-        guard model.busy || model.sessions.count > 1 else { requestTermination(); return }
+        guard model.busy || model.sessions.count > 1 || model.fileEditor.hasUnsavedChanges else { requestTermination(); return }
         let alert = CompactAlert(); closeConfirmation = alert
         alert.messageText = T("退出 Termvia？")
         alert.informativeText = T("未保存更改将丢失，传输将取消。")
@@ -87,14 +87,16 @@ import TermviaCore
     init() {
         do {
             let root: URL
-            if ProcessInfo.processInfo.arguments.contains("--launch-check") || ProcessInfo.processInfo.arguments.contains("--export-ui-previews") {
+            let arguments = ProcessInfo.processInfo.arguments
+            let isolated = arguments.contains("--launch-check") || arguments.contains("--export-ui-previews")
+            if isolated {
                 root = FileManager.default.temporaryDirectory.appendingPathComponent("termvia-launch-\(UUID())")
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             } else { root = try AppPaths.prepare() }
 #if TERMVIA_DIAGNOSTICS
             if ProcessInfo.processInfo.arguments.contains("--launch-check") { try AppearanceStartupLaunchCheck.prepare(root: root) }
 #endif
-            let model = AppModel(root: root)
+            let model = AppModel(root: root, enableKeychainStorage: !isolated)
             model.startApplicationAppearance()
             model.newStartPage()
             _model = StateObject(wrappedValue: model)

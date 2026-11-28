@@ -34,7 +34,9 @@ enum SessionPhase: Equatable {
     @Published var detectedSystem: String?
     var initialDirectoryAttemptCompleted = false
     var isLocalTerminal: Bool { !isStartPage && host == nil }
-    var readyForMonitoring: Bool { !isStartPage && (host == nil ? phase == .running : connected && initialDirectoryAttemptCompleted) }
+    var readyForMonitoring: Bool {
+        !isStartPage && (host == nil ? phase == .running : connected && (initialDirectoryAttemptCompleted || host?.controlPath != nil))
+    }
     @Published private(set) var connected = false
     var prepareConnection: ((Session) -> Void)?
     var connectionJob: Task<Void, Never>?
@@ -137,8 +139,11 @@ enum SessionPhase: Equatable {
     func installTransport(host: SSHHost, authentication: AuthenticationContext, commands: SSHCommands) throws {
         self.host = host; self.authentication = authentication; invocation = try commands.terminal(host)
     }
-    func connectionPrepared() {
+    func connectionPrepared(loginOutput: String = "") {
         guard phase == .connecting else { return }
+        if !loginOutput.isEmpty {
+            terminal.feed(text: loginOutput.replacingOccurrences(of: "\n", with: "\r\n") + "\r\n")
+        }
         prepared = true; connected = true; connectedAt = .now; phase = .ready; start()
     }
     func connectionFailed(_ error: String, retry: Bool = false) {

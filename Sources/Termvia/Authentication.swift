@@ -74,7 +74,7 @@ import TermviaCore
 }
 
 @MainActor final class AuthenticationContext {
-    let host: SSHHost
+    private(set) var host: SSHHost
     private let prompts: AuthenticationPrompts
     private var secret: String?
     private var passphrase: String?
@@ -107,6 +107,7 @@ import TermviaCore
         secret = host.authentication == .privateKey ? (values.passphrase.isEmpty ? nil : values.passphrase) : (values.password.isEmpty ? nil : values.password)
         passphrase = values.passphrase; confirmedPassphrase = values.passphrase; pendingPersistence = nil; pendingPassphrase = nil
     }
+    func useControlMaster(at path: String) { host.controlPath = path }
     private func confirmAuthentication(_ attempt: Attempt) {
         guard !attempt.cancelled, attempt.version == secretVersion else { return }
         let passwordChanged = attempt.suppliedSecret != nil && pendingPersistence == attempt.suppliedSecret
@@ -322,19 +323,21 @@ import TermviaCore
             Task { @MainActor in self?.close() }
         })
     }
-    func verifyConnection(_ host: SSHHost, commands: SSHCommands) async throws -> ConnectionVerification {
+    func holdControlMaster(commands: SSHCommands, path: String,
+                           onAuthenticated: @escaping @Sendable (ConnectionVerification) async -> Void) async throws -> ConnectionVerification {
         guard onClose != nil else { throw CancellationError() }
         let server = server
         return try await withTaskCancellationHandler(operation: {
-            try await ConnectionVerifier.verify(prepareHost(), commands: commands, environment: environment)
+            try await ConnectionVerifier.holdMaster(prepareHost(), commands: commands, controlPath: path,
+                                                     environment: environment, onAuthenticated: onAuthenticated)
         }, onCancel: { [weak self] in server.close(); Task { @MainActor in self?.close() } })
     }
-    func performSFTP(_ operation: SFTPOperation, invocation: Invocation, control: FileTransferControl? = nil, atomicReplacement: Bool = false) async throws -> RemoteDirectory? {
+    func performSFTP(_ operation: SFTPOperation, invocation: Invocation, control: FileTransferControl? = nil) async throws -> RemoteDirectory? {
         guard onClose != nil else { throw CancellationError() }
         let server = server
         return try await withTaskCancellationHandler(operation: {
             var invocation = try await prepareInvocation(invocation); invocation.environment.merge(environment) { _, new in new }
-            return try await SFTPClient().perform(operation, invocation: invocation, control: control, atomicReplacement: atomicReplacement)
+            return try await SFTPClient().perform(operation, invocation: invocation, control: control)
         }, onCancel: { [weak self] in
             server.close(); Task { @MainActor in self?.close() }
         })
@@ -356,12 +359,13 @@ import TermviaCore
             return try await SSHFileClient().resolveEntry(invocation)
         }, onCancel: { [weak self] in server.close(); Task { @MainActor in self?.close() } })
     }
-    func performSCP(local: String, remote: String, upload: Bool, invocation: Invocation, control: FileTransferControl, atomicReplacement: Bool = false) async throws {
+    func performSCP(local: String, remote: String, upload: Bool, invocation: Invocation, control: FileTransferControl, editorSave: Bool = false, stagedUpload: Bool = false) async throws {
         guard onClose != nil else { throw CancellationError() }
         let server = server
         try await withTaskCancellationHandler(operation: {
             var invocation = try await prepareInvocation(invocation); invocation.environment.merge(environment) { _, new in new }
-            try await SFTPClient().performSCP(local: local, remote: remote, upload: upload, invocation: invocation, control: control, atomicReplacement: atomicReplacement)
+            try await SFTPClient().performSCP(local: local, remote: remote, upload: upload, invocation: invocation,
+                                             control: control, editorSave: editorSave, stagedUpload: stagedUpload)
         }, onCancel: { server.close(); control.cancel(); Task { @MainActor [weak self] in self?.close() } })
     }
     func performSSHFiles(_ invocation: Invocation) async throws -> RemoteDirectory {

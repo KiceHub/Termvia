@@ -28,6 +28,7 @@ struct Transfer: Identifiable {
     var completedBytes: UInt64 = 0
     var bytesPerSecond = 0.0
     var editorOwned = false
+    var editorBaseDigest: String? = nil
     var operationTitle: String? = nil
     var completion: ((Bool) -> Void)? = nil
     var state = "排队中"
@@ -56,7 +57,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     @Published private(set) var hosts: [SSHHost] = []
     @Published private(set) var credentials: [LoginCredential] = []
     let authenticationPrompts = AuthenticationPrompts()
-    let wireGuardPool = WireGuardPool()
+    let wireGuardPool: WireGuardPool
     let fileEditor = FileEditorController()
     let fileConflicts = FileConflictPrompts()
     let quitShortcut = HoldToQuit()
@@ -67,6 +68,12 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     private var transientSecrets: [UUID: String] = [:]
     private let credentialStore: CredentialStore
     private let hostSecrets: any CredentialSecretStore
+    private let proxySecrets: any CredentialSecretStore
+    private let credentialStorage: CredentialStorage?
+    private var credentialStorageStarted = false
+    private var credentialStorageReadFailed = false
+    @Published private(set) var keychainChoice: Bool?
+    @Published private(set) var changingKeychainStorage = false
     private var credentialReadFailure: String?
     @Published var sessions: [Session] = [] { didSet { reconcileMonitoring() } }
     var splitAuxiliaryOwners: [UUID: [UUID: UUID]] = [:]
@@ -169,7 +176,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     @Published var hostSearchCollapsedGroups = Set<String>()
     @Published private(set) var hostSearchFocusRevision = 0
     let root: URL
-    var commands: SSHCommands { SSHCommands(knownHosts: root.appendingPathComponent("known_hosts").path, useAskpass: true, suppressWarnings: settings.suppressOpenSSHWarnings, keepAliveInterval: settings.sshKeepAlive ? settings.validated().sshKeepAliveInterval : 0) }
+    var commands: SSHCommands { SSHCommands(knownHosts: root.appendingPathComponent("known_hosts").path, useAskpass: true, suppressWarnings: settings.suppressOpenSSHWarnings, keepAliveInterval: settings.sshKeepAlive ? settings.validated().sshKeepAliveInterval : 0, knownHostsHelper: authenticationHelper) }
     private var jobs: [UUID: Task<Void, Never>] = [:]
     private var fileOperationTokens: [UUID: UUID] = [:]
     private var fileJobs: [UUID: Task<Void, Never>] = [:]
@@ -188,13 +195,27 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     private var settingsReadFailure: String?
     private var shuttingDown = false
     private var hostReadFailure: String?
+    private(set) var legacyIPv6TrustFailures: [String: String] = [:]
     private let hostStore: ConnectionStore
     private let authenticationHelper: URL?
-    init(root: URL, secretStore: (any CredentialSecretStore)? = nil, hostSecretStore: (any CredentialSecretStore)? = nil, authenticationHelper: URL? = nil) {
+    func forgetFingerprint(_ record: KnownHostRecord) async throws {
+        let store = KnownHostsStore(url: URL(fileURLWithPath: commands.knownHosts))
+        let remaining = try await store.forget(record, migrating: hosts)
+        let previous = legacyIPv6TrustFailures.values
+        legacyIPv6TrustFailures = remaining.mapValues { T("无法迁移旧版 IPv6 主机指纹：%@", $0) }
+        if let error, previous.contains(error) { self.error = legacyIPv6TrustFailures.values.sorted().first }
+    }
+    init(root: URL, secretStore: (any CredentialSecretStore)? = nil, hostSecretStore: (any CredentialSecretStore)? = nil,
+         authenticationHelper: URL? = nil, enableKeychainStorage: Bool = false, credentialStorage: CredentialStorage? = nil,
+         wireGuardHelper: URL? = nil) {
         self.authenticationHelper = authenticationHelper
-        hostSecrets = hostSecretStore ?? FileSecretStore(directory: root.appendingPathComponent("host-secrets", isDirectory: true))
+        wireGuardPool = WireGuardPool(helper: wireGuardHelper)
+        let storage = credentialStorage ?? (enableKeychainStorage ? CredentialStorage(root: root) : nil)
+        self.credentialStorage = storage
+        hostSecrets = hostSecretStore ?? storage?.store(for: .hosts) ?? FileSecretStore(directory: root.appendingPathComponent("host-secrets", isDirectory: true))
+        proxySecrets = storage?.store(for: .proxies) ?? FileSecretStore(directory: root.appendingPathComponent("proxy-secrets", isDirectory: true))
         self.root = root
-        credentialStore = CredentialStore(url: root.appendingPathComponent("credentials.json"), secrets: secretStore)
+        credentialStore = CredentialStore(url: root.appendingPathComponent("credentials.json"), secrets: secretStore ?? storage?.store(for: .profiles))
         hostStore = ConnectionStore(url: root.appendingPathComponent("hosts.json"))
         layout = WorkspaceLayout()
         settings = AppSettings()
@@ -208,6 +229,8 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
             catch { self.error = T("无法读取工作区设置：%@", error.localizedDescription) }
         }
         Localization.preference = layout.language
+        do { keychainChoice = try storage?.preference() }
+        catch { credentialStorageReadFailed = true; self.error = error.localizedDescription }
         let settingsFile = root.appendingPathComponent("settings.json")
         if FileManager.default.fileExists(atPath: settingsFile.path) {
             do { settings = try JSONDecoder().decode(AppSettings.self, from: Data(contentsOf: settingsFile)).validated() }
@@ -222,6 +245,17 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         }
         do { hosts = try hostStore.load() }
         catch { hostReadFailure = error.localizedDescription; self.error = T("无法读取主机配置：%@", error.localizedDescription) }
+        let knownHosts = KnownHostsStore(url: root.appendingPathComponent("known_hosts"))
+        do {
+            legacyIPv6TrustFailures = try knownHosts.migrateLegacyIPv6(for: hosts).mapValues { T("无法迁移旧版 IPv6 主机指纹：%@", $0) }
+            if let failure = legacyIPv6TrustFailures.values.sorted().first { self.error = failure }
+        } catch {
+            let message = T("无法迁移旧版 IPv6 主机指纹：%@", error.localizedDescription)
+            for host in hosts where host.address.contains(":") {
+                if let name = try? knownHosts.key(for: host) { legacyIPv6TrustFailures[name] = message }
+            }
+            self.error = message
+        }
         let workspaceFile = root.appendingPathComponent("host-workspaces.json")
         if FileManager.default.fileExists(atPath: workspaceFile.path) {
             do {
@@ -235,6 +269,29 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         }
         if let start = workspaces.states["start"] { layout = start.layout.applying(to: layout); localPath = start.localPath }
         colorScheme = AppAppearance.resolve(layout.appearance, inherited: NSApplication.shared.effectiveAppearance)
+    }
+    var canChangeKeychainStorage: Bool { credentialStorage != nil && !credentialStorageReadFailed }
+
+    func startCredentialStorage() async -> Bool {
+        guard let credentialStorage, canChangeKeychainStorage, !credentialStorageStarted else { return false }
+        credentialStorageStarted = true
+        changingKeychainStorage = true
+        defer { changingKeychainStorage = false }
+        do { try await Task.detached { try credentialStorage.retryCleanup() }.value }
+        catch { self.error = error.localizedDescription }
+        return keychainChoice == nil
+    }
+
+    func setKeychainStorage(_ enabled: Bool) async throws -> String? {
+        guard let credentialStorage, canChangeKeychainStorage, !changingKeychainStorage else { return nil }
+        changingKeychainStorage = true
+        defer { changingKeychainStorage = false }
+        let warning = try await Task.detached { try credentialStorage.selectKeychain(enabled) }.value
+        keychainChoice = enabled
+        return warning
+    }
+    private func checkCredentialMutation() throws {
+        guard !changingKeychainStorage else { throw SSHError.invalid("凭据正在迁移，请稍后重试。") }
     }
     var preferredColorScheme: ColorScheme? {
         AppAppearance.override(for: layout.appearance).map { AppAppearance.scheme(for: $0) }
@@ -322,22 +379,23 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         try commitProxySettings(updated, id: proxy.id, secret: nil)
     }
     private func commitProxySettings(_ updated: AppSettings, id: UUID, secret: String?) throws {
+        try checkCredentialMutation()
         if let settingsReadFailure { throw SSHError.invalid(T("无法读取设置，已保留原文件：%@", settingsReadFailure)) }
         let data = try JSONEncoder().encode(updated.validated())
-        let store = FileSecretStore(directory: root.appendingPathComponent("proxy-secrets"))
-        let previous = try store.read(id)
+        let previous = try proxySecrets.read(id)
         do {
-            if let secret { try store.write(secret, id: id) } else { try store.delete(id) }
+            if let secret { try proxySecrets.write(secret, id: id) } else { try proxySecrets.delete(id) }
             try data.write(to: root.appendingPathComponent("settings.json"), options: .atomic)
         } catch {
             let failure = error
-            do { if let previous { try store.write(previous, id: id) } else { try store.delete(id) } }
+            do { if let previous { try proxySecrets.write(previous, id: id) } else { try proxySecrets.delete(id) } }
             catch { throw SSHError.invalid(failure.localizedDescription + "\n" + error.localizedDescription) }
             throw failure
         }
         // Publish only once both persistence operations succeeded.
         settings = updated
     }
+    func proxySecret(_ id: UUID) throws -> String? { try proxySecrets.read(id) }
     func focusTerminal() {
         if active?.isStartPage == true { focusTarget = .hostSearch; hostSearchFocusRevision += 1; return }
         if focusTarget != .terminal { focusTarget = .terminal }; focusRevision += 1
@@ -447,6 +505,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         return profile.applying(to: host)
     }
     func saveCredential(_ profile: LoginCredential, secret: CredentialSecretUpdate) throws {
+        try checkCredentialMutation()
         if let credentialReadFailure { throw SSHError.invalid(credentialReadFailure) }
         credentials = try credentialStore.save(profile, secret: secret)
         for context in authenticationContexts(for: profile.id) {
@@ -459,6 +518,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     }
     func credentialUseCount(_ id: UUID) -> Int { hosts.filter { $0.credentialID == id }.count }
     func deleteCredential(_ profile: LoginCredential) throws {
+        try checkCredentialMutation()
         if let credentialReadFailure { throw SSHError.invalid(credentialReadFailure) }
         guard credentialUseCount(profile.id) == 0 else { throw SSHError.invalid("请先解除主机对该登录信息的引用") }
         credentials = try credentialStore.delete(profile.id)
@@ -501,6 +561,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     }
     func hasSavedHostSecret(_ id: UUID) -> Bool { (try? hostSecrets.read(id)) != nil }
     func saveConnection(_ host: SSHHost, secret: String) throws {
+        try checkCredentialMutation()
         try validateLoginSecret(secret)
         let previous = hosts.first(where: { $0.id == host.id })
         let previousProtocol = previous?.fileProtocol ?? .sftp
@@ -525,7 +586,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     }
     @discardableResult func copyHost(_ original: SSHHost) throws -> SSHHost {
         let original = hosts.first { $0.id == original.id } ?? original
-        var copy = original; copy.id = UUID(); copy.transportCommand = nil; copy.connectionEndpoint = nil
+        var copy = original; copy.id = UUID(); copy.transportCommand = nil; copy.connectionEndpoint = nil; copy.controlPath = nil
         let base = T("%@ 副本", original.name)
         copy.name = base
         var index = 2
@@ -725,6 +786,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         do { var value = hosts.first(where: { $0.id == host.id }) ?? host; value.customIcon = icon; try save(value) } catch { self.error = error.localizedDescription }
     }
     func deleteHost(_ host: SSHHost) throws {
+        try checkCredentialMutation()
         if let hostReadFailure { throw SSHError.invalid(T("原主机配置读取失败，已保留文件。请修复 hosts.json 并重新打开应用：%@", hostReadFailure)) }
         guard !hosts.contains(where: { $0.upstream == .host(host.id) }) else { throw SSHError.invalid("请先解除主机对该跳板机的引用") }
         let updated = hosts.filter { $0.id != host.id }
@@ -862,11 +924,10 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
                 try Task.checkCancellation()
                 let (host, authentication, route, security) = try await connectRoute(for: host, allowPrompts: !session.isAutomaticReconnect)
                 guard !Task.isCancelled, session.phase == .connecting else { route.close(); return }
-                defer { route.finishVerification() }
                 session.routeConnection = route
                 try session.installTransport(host: host, authentication: authentication, commands: commands)
                 session.connectionSecurity = security
-                session.connectionPrepared()
+                session.connectionPrepared(loginOutput: route.loginOutput)
                 if session.connected {
                     if isAuxiliaryOwner(session) { refreshDirectory(session) } else { session.initialDirectoryAttemptCompleted = true; reconcileMonitoring() }
                     if (hosts.first(where: { $0.id == host.id }) ?? host).detectedSystemVersion != HostSystemIcon.detectionVersion {
@@ -1200,7 +1261,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
         transfers.append(Transfer(host: host, local: paths, remote: paths, upload: true, method: host.fileProtocol ?? .sftp, downloadTarget: nil, activity: activity ?? active?.activity, startedAt: Date(), operationTitle: title, state: "失败", detail: message))
         error = message
     }
-    func enqueue(local: String, remote: String, upload: Bool, method: SSHCommands.FileProtocol, host target: SSHHost? = nil, authentication context: AuthenticationContext? = nil, overwrite: Bool = false, directory: Bool = false, askConflicts: Bool = false, activity owner: TabActivity? = nil, editorOwned: Bool = false, completion: ((Bool) -> Void)? = nil) {
+    func enqueue(local: String, remote: String, upload: Bool, method: SSHCommands.FileProtocol, host target: SSHHost? = nil, authentication context: AuthenticationContext? = nil, overwrite: Bool = false, directory: Bool = false, askConflicts: Bool = false, activity owner: TabActivity? = nil, editorOwned: Bool = false, editorBaseDigest: String? = nil, completion: ((Bool) -> Void)? = nil) {
         guard !shuttingDown else { completion?(false); return }
         guard let host = target ?? active?.host else { error = T("请先打开远程会话"); completion?(false); return }
         guard let owner = owner ?? active?.activity else { error = T("请先打开远程会话"); completion?(false); return }
@@ -1213,7 +1274,7 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
             else { authentication = try self.authentication(for: resolvedHost(host)) }
             let downloadTarget = try upload ? nil : DownloadTarget(destination: URL(fileURLWithPath: local))
             let control = FileTransferControl(); control.preserveFilePermissions = !editorOwned
-            transfers.append(Transfer(host: host, local: downloadTarget?.destination.path ?? local, remote: remote, upload: upload, method: method, overwrite: overwrite, directory: directory, askConflicts: askConflicts, downloadTarget: downloadTarget, authentication: authentication, activity: owner, control: control, editorOwned: editorOwned, completion: completion)); schedule()
+            transfers.append(Transfer(host: host, local: downloadTarget?.destination.path ?? local, remote: remote, upload: upload, method: method, overwrite: overwrite, directory: directory, askConflicts: askConflicts, downloadTarget: downloadTarget, authentication: authentication, activity: owner, control: control, editorOwned: editorOwned, editorBaseDigest: editorBaseDigest, completion: completion)); schedule()
         } catch { recordFileFailure(error.localizedDescription, title: upload ? "上传" : "下载", host: host, paths: local + " → " + remote, activity: owner); completion?(false) }
     }
     private func schedule() {
@@ -1251,14 +1312,17 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
                     let download = try transfer.downloadTarget.map { try DownloadStaging(target: $0, overwrite: overwrite) }
                     defer { download?.close() }
                     try await TransferConnection(commands: commands, transfer: transfer).file(local: download?.fileURL.path ?? transfer.local, remote: transfer.remote, upload: transfer.upload)
-                    // Acknowledged editor uploads have already committed on the server.
-                    if !transfer.editorOwned || !transfer.upload { try Task.checkCancellation() }
+                    // An acknowledged upload has already committed on the server.
+                    if !transfer.upload { try Task.checkCancellation() }
                     try download?.commit()
                     update(transfer.id, state: "成功")
                     if transfer.upload {
                         for session in allSessions where session.host?.id == transfer.host.id && !session.fileMutationInProgress && Self.remoteListingPath(session.remotePath) == (transfer.remote as NSString).deletingLastPathComponent { refreshDirectory(session) }
                     } else if !transfer.editorOwned { refreshLocalFiles() }
                 } catch is TransferSkipped { update(transfer.id, state: "已跳过") }
+                catch let recovery as RemoteEditorSave.RecoveryFailure {
+                    update(transfer.id, state: "失败", detail: recovery.localizedDescription)
+                }
                 catch is CancellationError { update(transfer.id, state: pausedTransfers.contains(transfer.id) ? "已暂停" : "已取消", detail: transfer.directory ? T("文件夹传输未完成，已完成的内容会保留。") : "") }
                 catch {
                     if transfer.activity?.isClosed == true { update(transfer.id, state: "已取消") }
@@ -1319,6 +1383,13 @@ enum SettingsPage: String, CaseIterable { case general, terminal, connection, pr
     var hasPendingFileOperations: Bool { !fileJobs.isEmpty }
     var busyRunningTransfers: Bool { !jobs.isEmpty }
     var hasLiveSessions: Bool { (allSessions + Array(retiringSessions.values)).contains { !$0.isStartPage && $0.phase.isActive } }
+    func trackRouteCleanup(_ cleanup: Task<Void, Never>) {
+        let token = UUID()
+        fileJobs[token] = Task { [weak self] in
+            await cleanup.value
+            self?.fileJobs[token] = nil
+        }
+    }
     func shutdown() {
         guard !shuttingDown else { return }
         shuttingDown = true; tabRenameTarget = nil; tabNameDraft = ""; quitShortcut.uninstall()

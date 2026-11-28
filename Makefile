@@ -17,12 +17,11 @@ clean:
 	rm -rf .build build dist
 
 run:
-	bash scripts/build-wireguard.sh
-	bash scripts/build-ppk.sh
+	bash scripts/build-rust-helpers.sh
 	swift build --arch arm64 --product termvia-askpass
 	swift build --arch arm64 --product termvia-proxy
-	install -m 755 .build/ppk-build/puttygen "$$(swift build --arch arm64 --show-bin-path)/termvia-ppk"
-	install -m 755 .build/termvia-wireguard "$$(swift build --arch arm64 --show-bin-path)/termvia-wireguard"
+	install -m 755 .build/rust/aarch64-apple-darwin/release/termvia-ppk \
+		.build/rust/aarch64-apple-darwin/release/termvia-wireguard "$$(swift build --arch arm64 --show-bin-path)/"
 	swift run --arch arm64 Termvia
 
 # Optional local checks are excluded from source releases.

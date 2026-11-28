@@ -21,8 +21,17 @@ public struct RemoteEntry: Identifiable, Equatable, Codable, Sendable {
 public struct RemoteDirectory: Equatable, Codable, Sendable { public let path: String; public let entries: [RemoteEntry]; public init(path: String, entries: [RemoteEntry]) { self.path = path; self.entries = entries } }
 public enum SFTPOperation: Sendable {
     case list(String), makeDirectory(String), makeFile(String), copyFile(String, String), rename(String, String), removeFile(String), removeDirectory(String), removeTree(String)
-    case uploadFile(local: String, remote: String), downloadFile(remote: String, local: String)
+    case uploadFile(local: String, remote: String), stageUpload(local: String, remote: String, directory: String)
+    case downloadFile(remote: String, local: String)
     indirect case batch([SFTPOperation])
+
+    fileprivate var stagesUpload: Bool {
+        switch self {
+        case .uploadFile, .stageUpload: return true
+        case .batch(let operations): return operations.contains { $0.stagesUpload }
+        default: return false
+        }
+    }
 }
 public enum SFTPFailure: LocalizedError {
     case status(UInt32, String), malformed, unsupported, closed(String), tooManyEntries, timeout
@@ -70,11 +79,11 @@ public final class SFTPClient: @unchecked Sendable {
         lock.lock(); let cancel = cancelled, timeout = timedOut; lock.unlock()
         if timeout { throw SFTPFailure.timeout }; if cancel { throw CancellationError() }
     }
-    public func perform(_ operation: SFTPOperation, invocation: Invocation, control: FileTransferControl? = nil, atomicReplacement: Bool = false) async throws -> RemoteDirectory? {
+    public func perform(_ operation: SFTPOperation, invocation: Invocation, control: FileTransferControl? = nil) async throws -> RemoteDirectory? {
         try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async { [self] in
-                    do { continuation.resume(returning: try run(operation, invocation: invocation, control: control, atomicReplacement: atomicReplacement)) }
+                    do { continuation.resume(returning: try run(operation, invocation: invocation, control: control)) }
                     catch { continuation.resume(throwing: error) }
                 }
             }
@@ -100,17 +109,23 @@ public final class SFTPClient: @unchecked Sendable {
             }
         }, onCancel: { self.cancel() })
     }
-    public func performSCP(local: String, remote: String, upload: Bool, invocation: Invocation, control: FileTransferControl, atomicReplacement: Bool = false) async throws {
+    public func performSCP(local: String, remote: String, upload: Bool, invocation: Invocation, control: FileTransferControl, editorSave: Bool = false, stagedUpload: Bool = false) async throws {
         try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 DispatchQueue.global(qos: .userInitiated).async { [self] in
-                    do { _ = try run(.batch([]), invocation: invocation, control: control, scp: (local, remote, upload), atomicReplacement: atomicReplacement); continuation.resume() }
+                    do {
+                        _ = try run(.batch([]), invocation: invocation, control: control, scp: (local, remote, upload),
+                                    editorSave: editorSave, stagedUpload: stagedUpload)
+                        continuation.resume()
+                    }
                     catch { continuation.resume(throwing: error) }
                 }
             }
         }, onCancel: { control.cancel(); self.cancel() })
     }
-    private func run(_ operation: SFTPOperation, invocation: Invocation, control: FileTransferControl? = nil, scp: (String, String, Bool)? = nil, atomicReplacement: Bool = false, inspection: ((SFTPChannel) throws -> Void)? = nil) throws -> RemoteDirectory? {
+    private func run(_ operation: SFTPOperation, invocation: Invocation, control: FileTransferControl? = nil,
+                     scp: (String, String, Bool)? = nil, editorSave: Bool = false, stagedUpload: Bool = false,
+                     inspection: ((SFTPChannel) throws -> Void)? = nil) throws -> RemoteDirectory? {
         try check()
         let child = Process(), input = Pipe(), output = Pipe(), errors = Pipe()
         _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
@@ -123,7 +138,9 @@ public final class SFTPClient: @unchecked Sendable {
         if cancelled { lock.unlock(); throw CancellationError() }
         guard !started else { lock.unlock(); throw SSHError.invalid("进程执行器不可重复使用") }; started = true
         do { try child.run() } catch { lock.unlock(); throw error }
-        process = child; allowsCleanupOnCancellation = atomicReplacement; lock.unlock()
+        process = child
+        allowsCleanupOnCancellation = editorSave || stagedUpload || operation.stagesUpload
+        lock.unlock()
         let errorBuffer = ErrorBuffer()
         DispatchQueue.global().async {
             while let data = try? errors.fileHandleForReading.read(upToCount: 4096), !data.isEmpty { errorBuffer.append(data) }
@@ -135,7 +152,11 @@ public final class SFTPClient: @unchecked Sendable {
         }
         defer {
             try? input.fileHandleForWriting.close()
-            ChildProcess.stop(child)
+            if editorSave || stagedUpload {
+                // EOF lets the remote helper remove its private staging directory
+                // when a save ends before commit. Bound the wait for an SSH peer.
+                DispatchQueue.global().asyncAfter(deadline: .now() + 1) { ChildProcess.stop(child) }
+            } else { ChildProcess.stop(child) }
             child.waitUntilExit()
             try? output.fileHandleForReading.close()
             lock.lock(); process = nil; lock.unlock()
@@ -144,21 +165,27 @@ public final class SFTPClient: @unchecked Sendable {
             let checkpoint = { [self] in try check(); try control?.checkpoint() }
             if let (local, remote, upload) = scp {
                 let stream = SCPStream(input: input.fileHandleForWriting, output: output.fileHandleForReading, check: checkpoint, control: control)
-                if atomicReplacement { try stream.replaceFile(local: local, remote: remote) }
-                else { try stream.transfer(local: local, remote: remote, upload: upload) }
+                if editorSave {
+                    if let prefix = invocation.input { try input.fileHandleForWriting.write(contentsOf: prefix) }
+                    try stream.replaceFile(local: local, remote: remote)
+                } else {
+                    try stream.transfer(local: local, remote: remote, upload: upload, stagedUpload: stagedUpload)
+                }
                 control?.finish(); return nil
             }
-            let channel = SFTPChannel(input: input.fileHandleForWriting, output: output.fileHandleForReading, check: checkpoint, control: control, finishInFlightRequests: atomicReplacement)
+            let channel = SFTPChannel(input: input.fileHandleForWriting, output: output.fileHandleForReading, check: checkpoint, control: control)
             try channel.initialize()
             if let inspection { try inspection(channel); try check(); return nil }
-            if atomicReplacement, case .uploadFile(let local, let remote) = operation {
-                try channel.replaceFile(local: local, remote: remote)
-                control?.finish()
-                return nil
-            }
             let result = try channel.perform(operation)
-            control?.finish(); try check()
+            control?.finish()
+            switch operation {
+            case .uploadFile, .stageUpload: return result
+            default: break
+            }
+            try check()
             return result
+        } catch let recovery as RemoteEditorSave.RecoveryFailure {
+            throw recovery
         } catch {
             try check()
             if case SFTPFailure.closed = error { throw SFTPFailure.closed(errorBuffer.text) }
@@ -174,6 +201,9 @@ public final class SFTPClient: @unchecked Sendable {
 
 enum SFTPField { case string(String), bytes(Data), integer(UInt32) }
 struct SFTPReader {
+    struct FileAttributes {
+        let kind: RemoteFileKind, size: UInt64?, modified: Date?, mode: UInt32
+    }
     let data: Data; var offset = 0
     mutating func byte() throws -> UInt8 { guard offset < data.count else { throw SFTPFailure.malformed }; defer { offset += 1 }; return data[offset] }
     mutating func integer() throws -> UInt32 {
@@ -191,11 +221,15 @@ struct SFTPReader {
     mutating func attributes() throws -> (RemoteFileKind, UInt64?, Date?) {
         let result = try attributesWithPermissions(); return (result.0, result.1, result.2)
     }
-    mutating func attributesWithPermissions() throws -> (RemoteFileKind, UInt64?, Date?, UInt32, owner: (uid: UInt32, gid: UInt32)?) {
+    mutating func attributesWithPermissions() throws -> (RemoteFileKind, UInt64?, Date?, UInt32) {
+        let metadata = try fileAttributes()
+        return (metadata.kind, metadata.size, metadata.modified, metadata.mode & 0o777)
+    }
+    mutating func fileAttributes() throws -> FileAttributes {
         let flags = try integer()
         guard flags & ~UInt32(0x8000000f) == 0 else { throw SFTPFailure.malformed }
         let size: UInt64? = flags & 1 != 0 ? try uint64() : nil
-        let owner = flags & 2 != 0 ? (try integer(), try integer()) : nil
+        if flags & 2 != 0 { _ = try integer(); _ = try integer() }
         let mode: UInt32 = flags & 4 != 0 ? try integer() : 0
         var modified: Date?
         if flags & 8 != 0 { _ = try integer(); modified = Date(timeIntervalSince1970: Double(try integer())) }
@@ -205,7 +239,7 @@ struct SFTPReader {
         }
         let kind: RemoteFileKind
         switch mode & 0xf000 { case 0x4000: kind = .directory; case 0x8000: kind = .file; case 0xa000: kind = .symbolicLink; default: kind = .other }
-        return (kind, size, modified, mode & 0o777, owner)
+        return FileAttributes(kind: kind, size: size, modified: modified, mode: mode)
     }
 }
 
@@ -213,14 +247,10 @@ private final class SFTPChannel {
     let input: FileHandle, output: FileHandle
     let check: () throws -> Void
     let control: FileTransferControl?
-    let finishInFlightRequests: Bool
-    private static let posixRename = "posix-rename@openssh.com"
-    private var canReplaceFile = false
-    private var requestInFlight = false
     var nextID: UInt32 = 0
-    init(input: FileHandle, output: FileHandle, check: @escaping () throws -> Void, control: FileTransferControl? = nil, finishInFlightRequests: Bool = false) {
+    private var extensions = Set<String>()
+    init(input: FileHandle, output: FileHandle, check: @escaping () throws -> Void, control: FileTransferControl? = nil) {
         self.input = input; self.output = output; self.check = check; self.control = control
-        self.finishInFlightRequests = finishInFlightRequests
     }
     static func uint32(_ value: UInt32) -> Data { Data([UInt8((value >> 24) & 255), UInt8((value >> 16) & 255), UInt8((value >> 8) & 255), UInt8(value & 255)]) }
     func write(type: UInt8, id: UInt32, fields: [SFTPField]) throws {
@@ -241,7 +271,6 @@ private final class SFTPChannel {
     func readExact(_ size: Int) throws -> Data {
         var result = Data()
         while result.count < size {
-            if !finishInFlightRequests { try check() }
             guard let bytes = try output.read(upToCount: size - result.count), !bytes.isEmpty else { throw SFTPFailure.closed("") }
             result.append(bytes)
         }
@@ -258,73 +287,25 @@ private final class SFTPChannel {
         try write(type: 1, id: 3, fields: [])
         var (type, payload) = try packet()
         guard type == 2, try payload.integer() == 3 else { throw SFTPFailure.unsupported }
-        if finishInFlightRequests {
-            while payload.offset < payload.data.count {
-                let name = try payload.string(), version = try payload.bytes()
-                if name == Self.posixRename && version == Data("1".utf8) { canReplaceFile = true }
-            }
+        while payload.offset < payload.data.count {
+            let name = try payload.string()
+            if try payload.bytes() == Data("1".utf8) { extensions.insert(name) }
         }
     }
-    func request(_ type: UInt8, fields: [SFTPField], cleanup: Bool = false) throws -> (UInt8, SFTPReader) {
-        if !cleanup { try check() }
-        requestInFlight = true
+    func request(_ type: UInt8, fields: [SFTPField], checking: Bool = true) throws -> (UInt8, SFTPReader) {
+        if checking { try check() }
         nextID += 1; try write(type: type, id: nextID, fields: fields)
         var (reply, payload) = try packet()
         guard try payload.integer() == nextID else { throw SFTPFailure.malformed }
-        requestInFlight = false
         return (reply, payload)
     }
     func status(_ payload: inout SFTPReader) throws -> UInt32 {
         let code = try payload.integer(), message = try payload.string(); _ = try payload.string()
         if code != 0 && code != 1 { throw SFTPFailure.status(code, message) }; return code
     }
-    func statusRequest(_ type: UInt8, fields: [SFTPField], cleanup: Bool = false) throws {
-        var (reply, payload) = try request(type, fields: fields, cleanup: cleanup)
+    func statusRequest(_ type: UInt8, fields: [SFTPField], checking: Bool = true) throws {
+        var (reply, payload) = try request(type, fields: fields, checking: checking)
         guard reply == 101, try status(&payload) == 0 else { throw SFTPFailure.malformed }
-    }
-    func replaceFile(local: String, remote: String) throws {
-        guard canReplaceFile else { throw SSHError.invalid("服务器不支持安全替换文件") }
-        let metadata = try regularFileMetadata(remote)
-        let url = URL(fileURLWithPath: local)
-        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        let source = try FileHandle(forReadingFrom: url)
-        defer { try? source.close() }
-        let temporary = try FilePaths.child(".termvia-editor-" + UUID().uuidString, in: (remote as NSString).deletingLastPathComponent)
-        let handle = try openFile(temporary, flags: 0x2a)
-        var handleOpen = true, published = false
-        defer {
-            if !published, !requestInFlight {
-                if handleOpen { try? statusRequest(4, fields: [.bytes(handle)], cleanup: true) }
-                if !requestInFlight { try? statusRequest(13, fields: [.string(temporary)], cleanup: true) }
-            }
-        }
-        control?.beginFile(remote, size: UInt64(max(0, size)))
-        var offset: UInt64 = 0
-        while let bytes = try source.read(upToCount: 32768), !bytes.isEmpty {
-            try statusRequest(6, fields: [.bytes(handle), .integer(UInt32(offset >> 32)), .integer(UInt32(truncatingIfNeeded: offset)), .bytes(bytes)])
-            offset += UInt64(bytes.count); control?.advance(bytes.count)
-        }
-        var mode: [SFTPField] = [.integer(4), .integer(metadata.permissions)]
-        if let owner = metadata.owner {
-            var (reply, attributes) = try request(8, fields: [.bytes(handle)])
-            guard reply == 105, let staged = try attributes.attributesWithPermissions().owner else { throw SFTPFailure.malformed }
-            if staged.uid != owner.uid || staged.gid != owner.gid {
-                mode = [.integer(6), .integer(owner.uid), .integer(owner.gid), .integer(metadata.permissions)]
-            }
-        }
-        try statusRequest(10, fields: [.bytes(handle)] + mode)
-        try statusRequest(4, fields: [.bytes(handle)]); handleOpen = false
-        _ = try regularFileMetadata(remote)
-        try statusRequest(200, fields: [.string(Self.posixRename), .string(temporary), .string(remote)])
-        published = true
-    }
-    private func regularFileMetadata(_ remote: String) throws -> (permissions: UInt32, owner: (uid: UInt32, gid: UInt32)?) {
-        var (reply, attributes) = try request(7, fields: [.string(remote)])
-        if reply == 101 { _ = try status(&attributes); throw SFTPFailure.malformed }
-        guard reply == 105 else { throw SFTPFailure.malformed }
-        let metadata = try attributes.attributesWithPermissions()
-        guard metadata.0 == .file else { throw SSHError.invalid("请选择普通文件；目录和符号链接不自动跟随") }
-        return (metadata.3, metadata.owner)
     }
     func names(_ payload: inout SFTPReader) throws -> [(String, RemoteFileKind, UInt64?, Date?)] {
         let count = try payload.integer(); guard count <= 100000 else { throw SFTPFailure.tooManyEntries }
@@ -337,8 +318,9 @@ private final class SFTPChannel {
     }
     func perform(_ operation: SFTPOperation) throws -> RemoteDirectory? {
         switch operation {
-        case .uploadFile(let local, let remote): try transferFile(local: local, remote: remote, upload: true)
-        case .downloadFile(let remote, let local): try transferFile(local: local, remote: remote, upload: false)
+        case .uploadFile(let local, let remote): try uploadFile(local: local, remote: remote)
+        case .stageUpload(let local, let remote, let directory): try uploadFile(local: local, remote: remote, handoff: directory)
+        case .downloadFile(let remote, let local): try downloadFile(remote: remote, local: local)
         case .list(let path): return try list(path)
         case .makeDirectory(let path): try statusRequest(14, fields: [.string(path), .integer(0)])
         case .makeFile(let path):
@@ -372,61 +354,102 @@ private final class SFTPChannel {
         }
         return nil
     }
-    private func transferFile(local: String, remote: String, upload: Bool) throws {
-        let url = URL(fileURLWithPath: local)
-        let localFile: FileHandle
-        let remoteHandle: Data
-        var downloadedPermissions: UInt32?
-        if upload {
-            // Recheck at execution time: a queued destination may have changed
-            // since conflict approval. Never knowingly truncate a link or device.
-            var (type, attributes) = try request(7, fields: [.string(remote)])
-            if type == 101 {
-                do { _ = try status(&attributes); throw SFTPFailure.malformed }
-                catch SFTPFailure.status(let code, _) where code == 2 {} // No such file.
-            } else {
-                guard type == 105, try attributes.attributes().0 == .file else { throw SSHError.invalid(T("目标类型不同或为符号链接：%@", remote)) }
-            }
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-            guard values.isRegularFile == true, values.isSymbolicLink != true else { throw SSHError.invalid("请选择普通文件；目录和符号链接不自动跟随") }
-            localFile = try FileHandle(forReadingFrom: url)
-            let permissions = (try FileManager.default.attributesOfItem(atPath: local)[.posixPermissions] as? NSNumber)?.uint32Value ?? 0o600
-            remoteHandle = try openFile(remote, flags: 0x1a, permissions: permissions & 0o777)
-            control?.beginFile(remote, size: UInt64(max(0, values.fileSize ?? 0)))
-        } else {
-            var (type, attrs) = try request(7, fields: [.string(remote)])
-            if type == 101 { _ = try status(&attrs); throw SFTPFailure.malformed }
-            guard type == 105 else { throw SFTPFailure.malformed }
-            let metadata = try attrs.attributesWithPermissions()
-            guard metadata.0 == .file else { throw SSHError.invalid("请选择普通文件；目录和符号链接不自动跟随") }
-            remoteHandle = try openFile(remote, flags: 1)
-            guard FileManager.default.createFile(atPath: local, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw SSHError.invalid("无法打开文件") }
-            localFile = try FileHandle(forWritingTo: url)
-            downloadedPermissions = metadata.3
-            control?.beginFile(remote, size: metadata.1 ?? 0)
+    private func entryAttributes(_ path: String) throws -> SFTPReader.FileAttributes? {
+        var (type, attributes) = try request(7, fields: [.string(path)])
+        if type == 101 {
+            do { _ = try status(&attributes); throw SFTPFailure.malformed }
+            catch SFTPFailure.status(let code, _) where code == 2 { return nil }
         }
+        guard type == 105 else { throw SFTPFailure.malformed }
+        return try attributes.fileAttributes()
+    }
+    private func uploadFile(local: String, remote: String, handoff: String? = nil) throws {
+        if handoff == nil, let existing = try entryAttributes(remote) {
+            throw existing.kind == .file ? RemoteUpload.destinationExists(remote) : RemoteUpload.invalidTarget(remote)
+        }
+        let url = URL(fileURLWithPath: local)
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size >= 0 else {
+            throw SSHError.invalid("请选择普通文件；目录和符号链接不自动跟随")
+        }
+        let input = try FileHandle(forReadingFrom: url)
+        defer { try? input.close() }
+        let permissions = (try FileManager.default.attributesOfItem(atPath: local)[.posixPermissions] as? NSNumber)?.uint32Value ?? 0o600
+        let directory = try handoff ?? RemoteUpload.stagingDirectory(for: remote)
+        let staging = directory + "/file"
+        if handoff == nil {
+            try statusRequest(14, fields: [.string(directory), .integer(4), .integer(0o700)])
+        }
+        var handle: Data?
+        var completed = false
+        defer {
+            // A cancelled transfer can still send cleanup requests at the next
+            // protocol boundary. The transport bounds this grace period.
+            if let handle { try? statusRequest(4, fields: [.bytes(handle)], checking: false) }
+            if !completed { try? statusRequest(13, fields: [.string(staging)], checking: false) }
+            if !completed || handoff == nil { try? statusRequest(15, fields: [.string(directory)], checking: false) }
+        }
+        guard let directoryMetadata = try entryAttributes(directory),
+              directoryMetadata.kind == .directory, directoryMetadata.mode & 0o077 == 0 else {
+            throw RemoteUpload.unsupported
+        }
+        let output = try openFile(staging, flags: 0x2a, permissions: handoff == nil ? permissions & 0o777 : 0o600)
+        handle = output
+        control?.beginFile(remote, size: UInt64(size))
+        var offset: UInt64 = 0
+        while offset < UInt64(size) {
+            try check()
+            guard let bytes = try input.read(upToCount: Int(min(UInt64(size) - offset, 32768))), !bytes.isEmpty else {
+                throw RemoteUpload.sourceChanged(local)
+            }
+            try statusRequest(6, fields: [.bytes(output), .integer(UInt32(offset >> 32)), .integer(UInt32(truncatingIfNeeded: offset)), .bytes(bytes)])
+            offset += UInt64(bytes.count); control?.advance(bytes.count)
+        }
+        if let extra = try input.read(upToCount: 1), !extra.isEmpty { throw RemoteUpload.sourceChanged(local) }
+        if extensions.contains("fsync@openssh.com") {
+            try statusRequest(200, fields: [.string("fsync@openssh.com"), .bytes(output)])
+        }
+        try statusRequest(4, fields: [.bytes(output)])
+        handle = nil
+        try check()
+        if handoff == nil {
+            // SFTP v3 RENAME rejects an existing destination. Do not use the
+            // overwrite extension for a path that was absent.
+            guard try entryAttributes(remote) == nil else { throw RemoteUpload.destinationChanged(remote) }
+            try statusRequest(18, fields: [.string(staging), .string(remote)])
+        }
+        completed = true
+        control?.finish()
+    }
+    private func downloadFile(remote: String, local: String) throws {
+        let url = URL(fileURLWithPath: local)
+        guard let metadata = try entryAttributes(remote), metadata.kind == .file else {
+            throw SSHError.invalid("请选择普通文件；目录和符号链接不自动跟随")
+        }
+        let handle = try openFile(remote, flags: 1)
         var remoteClosed = false
-        defer { try? localFile.close(); if !remoteClosed { try? statusRequest(4, fields: [.bytes(remoteHandle)]) } }
+        defer { if !remoteClosed { try? statusRequest(4, fields: [.bytes(handle)]) } }
+        guard FileManager.default.createFile(atPath: local, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw SSHError.invalid("无法打开文件")
+        }
+        let file = try FileHandle(forWritingTo: url)
+        defer { try? file.close() }
+        control?.beginFile(remote, size: metadata.size ?? 0)
         var offset: UInt64 = 0
         while true {
-            try check()
-            if upload {
-                guard let data = try localFile.read(upToCount: 32768), !data.isEmpty else { break }
-                try statusRequest(6, fields: [.bytes(remoteHandle), .integer(UInt32(offset >> 32)), .integer(UInt32(truncatingIfNeeded: offset)), .bytes(data)])
-                offset += UInt64(data.count); control?.advance(data.count)
-            } else {
-                var (type, reply) = try request(5, fields: [.bytes(remoteHandle), .integer(UInt32(offset >> 32)), .integer(UInt32(truncatingIfNeeded: offset)), .integer(32768)])
-                if type == 101 { if try status(&reply) == 1 { break }; throw SFTPFailure.malformed }
-                guard type == 103 else { throw SFTPFailure.malformed }
-                let data = try reply.bytes(); guard !data.isEmpty, data.count <= 32768 else { throw SFTPFailure.malformed }
-                try localFile.write(contentsOf: data); offset += UInt64(data.count); control?.advance(data.count)
-            }
+            var (type, reply) = try request(5, fields: [.bytes(handle), .integer(UInt32(offset >> 32)), .integer(UInt32(truncatingIfNeeded: offset)), .integer(32768)])
+            if type == 101 { if try status(&reply) == 1 { break }; throw SFTPFailure.malformed }
+            guard type == 103 else { throw SFTPFailure.malformed }
+            let bytes = try reply.bytes(); guard !bytes.isEmpty, bytes.count <= 32768 else { throw SFTPFailure.malformed }
+            try file.write(contentsOf: bytes); offset += UInt64(bytes.count); control?.advance(bytes.count)
         }
-        try statusRequest(4, fields: [.bytes(remoteHandle)]); remoteClosed = true
-        if !upload {
-            try localFile.synchronize()
-            if control?.preserveFilePermissions != false, let permissions = downloadedPermissions { try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: local) }
-        }; control?.finish()
+        try statusRequest(4, fields: [.bytes(handle)])
+        remoteClosed = true
+        try file.synchronize()
+        if control?.preserveFilePermissions != false {
+            try FileManager.default.setAttributes([.posixPermissions: metadata.mode & 0o777], ofItemAtPath: local)
+        }
+        control?.finish()
     }
     func inspectFile(_ path: String) throws -> EditorFileInspection {
         var (type, attributes) = try request(7, fields: [.string(path)])

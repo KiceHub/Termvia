@@ -36,48 +36,111 @@ import TermviaCore
     func run(_ invocation: Invocation) async throws {
         try Task.checkCancellation()
         let lease = try transfer.authentication?.lease(); defer { lease?.close() }
-        let result: CommandResult
-        if let lease { result = try await lease.run(invocation) }
-        else { result = try await ProcessRunner().run(invocation) }
+        let result = try await execute(invocation, lease: lease)
         try Task.checkCancellation()
         guard result.status == 0 else { throw SSHError.invalid(result.output) }
         lease?.confirmAuthentication()
     }
-    func file(local: String, remote: String, upload: Bool) async throws {
+    private func execute(_ invocation: Invocation, lease: AuthenticationLease?) async throws -> CommandResult {
+        if let lease { return try await lease.run(invocation) }
+        return try await ProcessRunner().run(invocation)
+    }
+
+    private func sftp(_ operation: SFTPOperation, invocation: Invocation, lease: AuthenticationLease?, control: FileTransferControl?) async throws {
+        if let lease { _ = try await lease.performSFTP(operation, invocation: invocation, control: control) }
+        else { _ = try await SFTPClient().perform(operation, invocation: invocation, control: control) }
+    }
+
+    private func overwriteSFTP(local: String, remote: String, subsystem: Invocation, lease: AuthenticationLease?) async throws {
+        let overwrite = try RemoteUpload.Overwrite(remote: remote)
+        let inspect = try commands.execute(host, command: overwrite.inspectCommand)
+        let reply = try await execute(inspect, lease: lease)
+        let lines = reply.output.split(whereSeparator: \.isNewline)
+        guard reply.status == 0, lines.count == 1, let version = lines.first else {
+            throw RemoteUpload.failure(reply.output, remote: remote)
+        }
+        do {
+            let publish = try commands.execute(host, command: overwrite.publishCommand(version: String(version)))
+            try await sftp(.stageUpload(local: local, remote: remote, directory: overwrite.directory),
+                           invocation: subsystem, lease: lease, control: transfer.control)
+            try Task.checkCancellation()
+            // Once publication starts, wait for the server's response even
+            // if the transfer is cancelled while the atomic rename is in flight.
+            let commit = Task { try await execute(publish, lease: lease) }
+            let timeout = Task {
+                do { try await Task.sleep(for: .seconds(20)) } catch { return }
+                commit.cancel()
+            }
+            defer { timeout.cancel() }
+            let result = try await commit.value
+            guard result.status == 0 else { throw RemoteUpload.failure(result.output, remote: remote) }
+        } catch {
+            // The server normally cleans up after publish. If publication
+            // could not start, remove the private staging entry over SFTP.
+            let cleanup = Task {
+                let file = overwrite.directory + "/file"
+                try? await sftp(.removeFile(file), invocation: subsystem, lease: lease, control: nil)
+                try? await sftp(.removeDirectory(overwrite.directory), invocation: subsystem, lease: lease, control: nil)
+            }
+            await cleanup.value
+            throw error
+        }
+    }
+    func file(local: String, remote: String, upload: Bool, overwrite: Bool? = nil) async throws {
         _ = try commands.transfer(host, local: local, remote: remote, upload: upload, method: transfer.method)
         let lease = try transfer.authentication?.lease(); defer { lease?.close() }
-        let atomicReplacement = upload && transfer.editorOwned
-        if transfer.method == .sftp {
-            let operation: SFTPOperation = upload ? .uploadFile(local: local, remote: remote) : .downloadFile(remote: remote, local: local)
+        if upload && transfer.editorOwned {
+            guard let digest = transfer.editorBaseDigest else { throw SFTPFailure.malformed }
+            let file = URL(fileURLWithPath: local)
+            guard let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size >= 0 else { throw SFTPFailure.malformed }
+            let request = try RemoteEditorSave.upload(remote: remote, size: UInt64(size), expectedDigest: digest)
+            var invocation = try commands.execute(host, command: request.command)
+            invocation.input = request.input
+            if let lease { try await lease.performSCP(local: local, remote: remote, upload: true, invocation: invocation, control: transfer.control, editorSave: true) }
+            else { try await SFTPClient().performSCP(local: local, remote: remote, upload: true, invocation: invocation, control: transfer.control, editorSave: true) }
+        } else if transfer.method == .sftp {
             let invocation = try commands.sftpSubsystem(host)
-            if let lease { _ = try await lease.performSFTP(operation, invocation: invocation, control: transfer.control, atomicReplacement: atomicReplacement) }
-            else { _ = try await SFTPClient().perform(operation, invocation: invocation, control: transfer.control, atomicReplacement: atomicReplacement) }
+            if upload && (overwrite ?? transfer.overwrite) {
+                try await overwriteSFTP(local: local, remote: remote, subsystem: invocation, lease: lease)
+            } else {
+                let operation: SFTPOperation = upload ? .uploadFile(local: local, remote: remote) : .downloadFile(remote: remote, local: local)
+                try await sftp(operation, invocation: invocation, lease: lease, control: transfer.control)
+            }
         } else {
-            let command: String
-            if atomicReplacement {
-                let file = URL(fileURLWithPath: local)
-                let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                command = try SSHFileClient.editorSaveCommand(remote: remote, size: UInt64(max(0, size)))
-            } else { command = "scp " + (upload ? "-t" : "-f") + " -- " + SSHRoute.shellQuote(remote) }
+            let command = upload ? try RemoteUpload.scpCommand(remote: remote, overwrite: overwrite ?? transfer.overwrite)
+                                 : "scp -f -- " + SSHRoute.shellQuote(remote)
             let invocation = try commands.execute(host, command: command)
-            if let lease { try await lease.performSCP(local: local, remote: remote, upload: upload, invocation: invocation, control: transfer.control, atomicReplacement: atomicReplacement) }
-            else { try await SFTPClient().performSCP(local: local, remote: remote, upload: upload, invocation: invocation, control: transfer.control, atomicReplacement: atomicReplacement) }
+            if let lease {
+                try await lease.performSCP(local: local, remote: remote, upload: upload, invocation: invocation,
+                                           control: transfer.control, stagedUpload: upload)
+            } else {
+                try await SFTPClient().performSCP(local: local, remote: remote, upload: upload, invocation: invocation,
+                                                control: transfer.control, stagedUpload: upload)
+            }
         }
         lease?.confirmAuthentication()
     }
-    func fileBatch(_ items: [(local: String, remote: String)]) async throws {
-        if transfer.method == .scp { for item in items { try await file(local: item.local, remote: item.remote, upload: transfer.upload) }; return }
+    func fileBatch(_ items: [(local: String, remote: String)], approvedOverwrites: Set<String> = []) async throws {
+        if transfer.method == .scp || (transfer.upload && items.contains { approvedOverwrites.contains($0.remote) }) {
+            for item in items {
+                try await file(local: item.local, remote: item.remote, upload: transfer.upload, overwrite: approvedOverwrites.contains(item.remote))
+            }
+            return
+        }
         let lease = try transfer.authentication?.lease(); defer { lease?.close() }
-        let operation = SFTPOperation.batch(items.map { transfer.upload ? .uploadFile(local: $0.local, remote: $0.remote) : .downloadFile(remote: $0.remote, local: $0.local) })
+        let operation = SFTPOperation.batch(items.map {
+            transfer.upload ? .uploadFile(local: $0.local, remote: $0.remote)
+                            : .downloadFile(remote: $0.remote, local: $0.local)
+        })
         let invocation = try commands.sftpSubsystem(host)
-        if let lease { _ = try await lease.performSFTP(operation, invocation: invocation, control: transfer.control) }
-        else { _ = try await SFTPClient().perform(operation, invocation: invocation, control: transfer.control) }
+        try await sftp(operation, invocation: invocation, lease: lease, control: transfer.control)
         lease?.confirmAuthentication()
     }
-    func files(_ paths: [String], localRoot: URL) async throws {
+    func files(_ paths: [String], localRoot: URL, approvedOverwrites: Set<String> = []) async throws {
         for start in stride(from: 0, to: paths.count, by: 64) {
             try Task.checkCancellation()
-            try await fileBatch(paths[start..<min(start + 64, paths.count)].map { (localRoot.appendingPathComponent($0).path, transfer.remote + "/" + $0) })
+            try await fileBatch(paths[start..<min(start + 64, paths.count)].map { (localRoot.appendingPathComponent($0).path, transfer.remote + "/" + $0) },
+                                approvedOverwrites: approvedOverwrites)
         }
     }
 }

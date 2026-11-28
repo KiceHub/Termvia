@@ -14,7 +14,7 @@ import TermviaCore
     private var header: NSHostingView<EditorHeaderContent>?
     private var appearanceRefresh: ToolbarAppearanceRefresh?
     private var tabMonitor: Any?
-    let toolbar = NSToolbar(identifier: "Termvia.Editor.Titlebar")
+    let toolbar = NSToolbar(identifier: "Termvia.Editor.Titlebar.\(UUID().uuidString)")
 
     init(controller: FileEditorController, window: NSWindow) {
         self.controller = controller; self.window = window
@@ -78,7 +78,8 @@ import TermviaCore
     }
     private func enabled(_ identifier: NSToolbarItem.Identifier, controller: FileEditorController) -> Bool {
         guard let document = controller.currentDocument, !document.closing else { return false }
-        if identifier == Self.refreshID || identifier == Self.saveID { return !document.refreshing && !document.isDisconnected }
+        if identifier == Self.saveID { return !document.refreshing && document.canSave }
+        if identifier == Self.refreshID { return !document.refreshing && !document.isDisconnected }
         return true
     }
     @objc private func refresh() { controller?.refreshCurrent() }
@@ -123,7 +124,8 @@ private struct EditorTab: View {
     var body: some View {
         NativeSessionTab(content: AnyView(content.environment(\.colorScheme, scheme).environment(\.appearsActive, active)), actions: [
             .init(T("查找...")) { controller.select(document); controller.showFind() },
-            .init(T("保存"), enabled: !document.isDisconnected && !document.refreshing && !document.closing) { controller.select(document); controller.saveCurrent() },
+            .init(T("保存"), enabled: document.canSave && !document.refreshing && !document.closing) { controller.select(document); controller.saveCurrent() },
+            .init(T("另存为…"), enabled: !document.refreshing && !document.closing) { controller.saveLocalCopy(document) },
             .init(T("关闭文件")) { controller.close(document) },
             .init(T("关闭其他文件")) { controller.closeOthers(document) },
             .init(T("关闭全部文件")) { controller.closeAll() }

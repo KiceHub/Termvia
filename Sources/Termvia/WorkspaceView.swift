@@ -7,6 +7,7 @@ struct WorkspaceView: View {
     @Environment(\.locale) private var uiLocale
     @ObservedObject var model: AppModel
     @State private var savedHost: SSHHost?
+    @State private var credentialChoicePresented = false
     var body: some View {
         let _ = uiLocale.identifier
         let key = model.workspaceKey
@@ -77,10 +78,22 @@ struct WorkspaceView: View {
             .init(T("保存")) { model.confirmTabRename() },
             .init(T("取消"), role: .cancel) { model.tabRenameTarget = nil; model.focusTerminal() }
         ])
+        .task { if await model.startCredentialStorage() { credentialChoicePresented = true } }
+        .compactAlert(T("使用 macOS 钥匙串保存登录信息？"), isPresented: $credentialChoicePresented,
+                      message: T("使用钥匙串保护已保存的密码和密钥。你可以稍后在设置的“登录信息”中更改。"), actions: [
+            .init(T("启用钥匙串")) { setKeychainStorage(true) },
+            .init(T("不使用钥匙串"), role: .cancel) { setKeychainStorage(false) }
+        ])
         .compactAlert(T("操作失败"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } }), message: model.error ?? "", actions: [
             .init(T("确定")) { model.error = nil }
         ])
         .workspaceEnvironment(model: model)
+    }
+    private func setKeychainStorage(_ enabled: Bool) {
+        Task {
+            do { if let warning = try await model.setKeychainStorage(enabled) { model.error = warning } }
+            catch { model.error = error.localizedDescription }
+        }
     }
     private func finishHostEditor() {
         model.hostCopyDraft = nil

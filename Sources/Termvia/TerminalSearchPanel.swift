@@ -47,9 +47,14 @@ private final class TerminalSearchField: NSSearchField {
     private weak var editor: NSTextView?
     private var options = FindOptions()
     private var onOptionsChanged: ((FindOptions) -> Void)?
+    private var editorFormat: (() -> EditorReplacementFormat)?
+    private var onReplacementFailure: ((Error) -> Void)?
     private var editorMatches: EditorFindMatches?
     private var editorSearch: Task<Void, Never>?
     private var editorReplacement: Task<Void, Never>?
+    private var terminalMatches: TerminalFindMatches?
+    private var terminalCursor: TerminalFindMatches.Cursor?
+    private var terminalSearch: Task<Void, Never>?
     private var replaceMode = false
     private let closeButton = NSButton()
     private let counter = NSTextField(labelWithString: "0/0")
@@ -207,8 +212,6 @@ private final class TerminalSearchField: NSSearchField {
         updateOptionsMenu()
         if item.tag == 2 { updateControls() }
         else {
-            terminal?.clearSearch()
-            searchedQuery = ""
             find(forward: false, reset: true)
         }
     }
@@ -235,11 +238,14 @@ private final class TerminalSearchField: NSSearchField {
     }
 
     func present(for editor: NSTextView, in window: NSWindow, options: FindOptions,
+                 format: (() -> EditorReplacementFormat)? = nil, onReplacementFailure: ((Error) -> Void)? = nil,
                  onOptionsChanged: @escaping (FindOptions) -> Void) {
         if self.editor !== editor || parent !== window { close() }
         self.editor = editor
         self.options = options
         self.onOptionsChanged = onOptionsChanged
+        editorFormat = format
+        self.onReplacementFailure = onReplacementFailure
         present(in: window)
     }
 
@@ -267,6 +273,12 @@ private final class TerminalSearchField: NSSearchField {
         editorReplacement?.cancel()
         editorReplacement = nil
         editorMatches = nil
+        terminalSearch?.cancel()
+        terminalSearch = nil
+        terminalMatches = nil
+        terminalCursor = nil
+        editorFormat = nil
+        onReplacementFailure = nil
         terminal = nil
         editor = nil
         onOptionsChanged = nil
@@ -287,6 +299,10 @@ private final class TerminalSearchField: NSSearchField {
         pendingSearch?.cancel()
         pendingSearch = nil
         if editor != nil { invalidateEditorResults() }
+        if terminal != nil {
+            terminalSearch?.cancel()
+            terminalSearch = nil
+        }
         guard (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
         if field.stringValue.isEmpty {
             find(forward: false, reset: true)
@@ -327,23 +343,6 @@ private final class TerminalSearchField: NSSearchField {
         return options.wraps || (forward ? match.index < match.total : match.index > 1)
     }
 
-    private func literalCanOverlap(_ query: String) -> Bool {
-        let characters = Array(options.caseSensitive ? query : query.folding(options: .caseInsensitive, locale: nil))
-        guard characters.count > 1 else { return false }
-        // Track the longest proper prefix which is also a suffix. Only those
-        // literals can produce a reverse match absent from the forward count.
-        var prefixLengths = [Int](repeating: 0, count: characters.count)
-        var length = 0
-        for index in 1..<characters.count {
-            while length > 0, characters[index] != characters[length] {
-                length = prefixLengths[length - 1]
-            }
-            if characters[index] == characters[length] { length += 1 }
-            prefixLengths[index] = length
-        }
-        return length > 0
-    }
-
     private func find(forward: Bool, reset: Bool = false) {
         pendingSearch?.cancel()
         pendingSearch = nil
@@ -355,37 +354,79 @@ private final class TerminalSearchField: NSSearchField {
             return
         }
         guard let terminal else { return }
-        // SwiftTerm's backward literal search can select overlaps that its
-        // forward count skips. An escaped pattern uses nonoverlapping matches
-        // in both directions, while keeping user text literal.
-        let escape = !options.regex && literalCanOverlap(query)
-        let pattern = escape ? NSRegularExpression.escapedPattern(for: query) : query
-        let search = SearchOptions(caseSensitive: options.caseSensitive, regex: options.regex || escape, wholeWord: options.wholeWord)
-        if !reset, sameQuery, !canNavigate(forward: forward) {
-            guard forward else { return }
-            let current = terminal.searchMatchSummary(pattern, options: search, limit: .max)
-            // Output may have appended matches since we reached the end.
-            guard current.index == 0, current.total > match.total else { return }
-        }
-        let found: Bool
+        terminalSearch?.cancel()
+        let useCache = !reset && sameQuery
         if query.isEmpty {
-            if !searchedQuery.isEmpty { terminal.clearSearch() }
-            found = false
-        } else if forward {
-            found = terminal.findNext(pattern, options: search)
-        } else {
-            // SwiftTerm can exhaust the last row before wrapping a reverse search.
-            let shouldWrap = options.wraps && match.total > 0 && sameQuery
-            found = terminal.findPrevious(pattern, options: search) || (shouldWrap && terminal.findPrevious(pattern, options: search))
+            terminalMatches = nil
+            terminalCursor = nil
+            if !searchedQuery.isEmpty { terminal.selectNone() }
+            searchedQuery = ""
+            match = (0, 0)
+            updateControls()
+            return
         }
-        match = found ? terminal.searchMatchSummary(pattern, options: search, limit: .max) : (0, 0)
-        if found, match.index == 0 {
-            // SwiftTerm enumeration skips overlaps that reverse search can select.
-            terminal.clearSearch()
-            match = terminal.findNext(pattern, options: search) ? terminal.searchMatchSummary(pattern, options: search, limit: .max) : (0, 0)
+        let options = options
+        let cached = useCache ? terminalMatches : nil
+        let previous = useCache ? terminalCursor : nil
+        let work = Task.detached(priority: .userInitiated) { [weak terminal] in
+            guard let terminal else { return nil as (TerminalFindMatches, TerminalFindMatches.Cursor?)? }
+            // Output can trim the first batch during inspection. Retry against
+            // its new retained range once without blocking the main actor.
+            for _ in 0..<2 {
+                guard !Task.isCancelled, let state = TerminalFindMatches.State(in: terminal) else { return nil }
+                let sameIndex = cached?.state == state
+                guard let results = sameIndex ? cached : TerminalFindMatches(in: terminal, state: state, query: query, options: options) else { continue }
+                let cursor = results.move(in: terminal, from: previous, sameIndex: sameIndex, forward: forward, wraps: options.wraps)
+                // Repaints can move or replace a live-screen match while the
+                // older scrollback is being indexed. Retry live results once.
+                if (cursor?.location.end.row ?? state.liveTopRow) >= state.liveTopRow,
+                   TerminalFindMatches.State(in: terminal) != state { continue }
+                return (results, cursor)
+            }
+            return nil
         }
-        searchedQuery = query
-        updateControls()
+        terminalSearch = Task { [weak self, weak terminal] in
+            let result = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+            guard !Task.isCancelled, let self, let terminal, self.terminal === terminal,
+                  (query as NSString).isEqual(to: field.stringValue) else { return }
+            terminalSearch = nil
+            guard let (results, cursor) = result else { return }
+            terminalMatches = results
+            terminalCursor = if let cursor, select(cursor.location, in: terminal, state: results.state) { cursor } else { nil }
+            if terminalCursor == nil { terminal.selectNone() }
+            match = (terminalCursor?.index ?? 0, results.total)
+            searchedQuery = query
+            updateControls()
+        }
+    }
+
+    private func select(_ location: TerminalFindMatches.Location, in terminal: ThemedTerminalView,
+                        state: TerminalFindMatches.State) -> Bool {
+        // Convert just before selecting so trims can move the origin without
+        // changing the absolute identity of a retained match.
+        guard location.stillMatches(in: terminal, state: state),
+              let bounds = terminal.terminalContentSnapshot(region: .rows(Int.min..<Int.min)),
+              let end = terminal.terminalContentSnapshot(region: .rows(Int.max..<Int.max)),
+              bounds.dimensions == state.dimensions, end.dimensions == state.dimensions,
+              (bounds.bufferKind == .alt) == state.alternate, end.bufferKind == bounds.bufferKind else { return false }
+        let first = bounds.capturedRange.lowerBound
+        guard location.start.row >= first, location.end.row < end.capturedRange.upperBound else { return false }
+        let start = Position(col: location.start.col, row: location.start.row - first)
+        let finish = Position(col: location.end.col, row: location.end.row - first)
+        terminal.setSelectionRange(start: start, end: finish)
+        // SwiftTerm takes its own lock for coordinate selection, so bracket
+        // it with checks in case its parsing thread repaints or trims a row.
+        guard let selectedBounds = terminal.terminalContentSnapshot(region: .rows(Int.min..<Int.min)),
+              selectedBounds.capturedRange.lowerBound == first,
+              location.stillMatches(in: terminal, state: state) else { return false }
+        if !state.alternate {
+            let scrollback = max(0, end.liveTopRow - first)
+            let top = Int((terminal.scrollPosition * Double(scrollback)).rounded())
+            if !(top..<(top + state.dimensions.rows)).contains(start.row) {
+                terminal.scrollTo(row: start.row - state.dimensions.rows / 2)
+            }
+        }
+        return true
     }
 
     func editorTextChanged() {
@@ -481,20 +522,22 @@ private final class TerminalSearchField: NSSearchField {
         let range = current.map { results.ranges[$0] } ?? NSRange(location: 0, length: results.text.utf16.count)
         if !all, range != editor.selectedRange() { return }
         let template = replacement.stringValue
-        guard all || results.expandsTemplate(template) else {
-            applyReplacement(template, in: editor, range: range, all: all)
-            return
-        }
-        let work = Task.detached(priority: .userInitiated) { results.replacement(template, at: current) }
+        let format = editorFormat?() ?? .init()
+        let work = Task.detached(priority: .userInitiated) { try results.replacement(template, at: current, format: format) }
         editorReplacement = Task { [weak self, weak editor] in
-            let value = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+            let result = await withTaskCancellationHandler { await work.result } onCancel: { work.cancel() }
             guard !Task.isCancelled, let self else { return }
             self.editorReplacement = nil
             self.updateControls()
             guard let editor, self.editor === editor, editor.isEditable, self.parent?.attachedSheet == nil, NSApp.modalWindow == nil,
                   results.isCurrent(text: editor.string, query: self.field.stringValue, options: self.options),
-                  all || range == editor.selectedRange() else { return }
-            self.applyReplacement(value, in: editor, range: range, all: all)
+                  format == (self.editorFormat?() ?? .init()), all || range == editor.selectedRange() else { return }
+            switch result {
+            case .success(let value): self.applyReplacement(value, in: editor, range: range, all: all)
+            case .failure(let error):
+                if let onReplacementFailure = self.onReplacementFailure { onReplacementFailure(error) }
+                else { NSSound.beep() }
+            }
         }
         updateControls()
     }

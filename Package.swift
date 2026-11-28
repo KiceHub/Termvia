@@ -36,7 +36,8 @@ let package = Package(
     defaultLocalization: "en",
     platforms: [.macOS("27.0")],
     products: products,
-    dependencies: [.package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.99.2")],
+    // This revision exposes coordinate selection on macOS for terminal search.
+    dependencies: [.package(url: "https://github.com/migueldeicaza/SwiftTerm.git", revision: "e1ff7f7b763dc194365f91dfd69cbbfc3810e13f")],
     targets: targets,
     swiftLanguageModes: [.v5]
 )

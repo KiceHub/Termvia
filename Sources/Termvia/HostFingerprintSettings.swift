@@ -35,7 +35,7 @@ struct HostFingerprintSettings: View {
                     guard let record = pending else { return }
                     Task {
                         busy = true
-                        do { try await store.forget(record); await load() }
+                        do { try await model.forgetFingerprint(record); await load() }
                         catch { self.error = error.localizedDescription }
                         busy = false
                     }

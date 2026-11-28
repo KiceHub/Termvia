@@ -96,7 +96,7 @@ struct ProxyEditor: View {
         }.padding(20).frame(width: 500).task {
             guard !creating else { return }
             do {
-                let value = try FileSecretStore(directory: model.root.appendingPathComponent("proxy-secrets")).read(proxy.id) ?? ""
+                let value = try model.proxySecret(proxy.id) ?? ""
                 if proxy.kind == .wireguard, let secrets = try? JSONDecoder().decode(WireGuardSecrets.self, from: Data(value.utf8)) { privateKey = secrets.privateKey; presharedKey = secrets.presharedKey }
                 else { password = value }
             } catch { self.error = error.localizedDescription }

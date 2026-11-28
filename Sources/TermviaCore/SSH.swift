@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public struct SSHHost: Codable, Identifiable, Equatable, Sendable {
@@ -17,11 +18,37 @@ public struct SSHHost: Codable, Identifiable, Equatable, Sendable {
     /// Runtime transport, never persisted or accepted from a host document.
     public var transportCommand: String? = nil
     public var connectionEndpoint: String? = nil
+    /// Private control socket of an already authenticated connection.
+    public var controlPath: String? = nil
     public var connectionAddress: String { connectionEndpoint ?? address }
     private enum CodingKeys: String, CodingKey { case id, name, address, user, port, identity, customIcon, detectedSystem, detectedSystemVersion, group, authentication, credentialID, fileProtocol, upstream }
     public var fileProtocol: SSHCommands.FileProtocol? = nil
     public init(name: String, address: String, user: String, port: Int = 22, identity: String = "") {
         self.name = name; self.address = address; self.user = user; self.port = port; self.identity = identity
+    }
+
+    static func knownHostsKey(address: String, port: Int) -> String {
+        var name = address
+        if address.contains(":") {
+            let parts = address.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
+            var ipv6 = in6_addr()
+            if inet_pton(AF_INET6, String(parts[0]), &ipv6) == 1 {
+                var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                if inet_ntop(AF_INET6, &ipv6, &buffer, socklen_t(buffer.count)) != nil {
+                    name = String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+                    if parts.count == 2 {
+                        let scope = String(parts[1])
+                        let escapePrefix = "termvia-scope-"
+                        // OpenSSH lowercases HostKeyAlias. Preserve case-sensitive
+                        // interface names without colliding with literal names.
+                        let aliasScope = scope == scope.lowercased() && !scope.hasPrefix(escapePrefix)
+                            ? scope : escapePrefix + scope.utf8.map { String(format: "%02x", $0) }.joined()
+                        name += "%" + aliasScope
+                    }
+                }
+            }
+        }
+        return port == 22 ? name : "[\(name)]:\(port)"
     }
     public func validate() throws {
         if authentication == .privateKey || authentication == .keyAndPassword, identity.isEmpty { throw SSHError.invalid("请选择私钥文件") }
@@ -57,19 +84,46 @@ public struct SSHCommands: Sendable {
     public let useAskpass: Bool
     public let suppressWarnings: Bool
     public let keepAliveInterval: Int
-    public init(knownHosts: String, useAskpass: Bool = false, suppressWarnings: Bool = true, keepAliveInterval: Int = 0) {
+    private let knownHostsHelper: URL?
+    public init(knownHosts: String, useAskpass: Bool = false, suppressWarnings: Bool = true, keepAliveInterval: Int = 0, knownHostsHelper: URL? = nil) {
         self.knownHosts = knownHosts; self.useAskpass = useAskpass; self.suppressWarnings = suppressWarnings
         self.keepAliveInterval = min(300, max(0, keepAliveInterval))
+        self.knownHostsHelper = knownHostsHelper
     }
     private func options(_ host: SSHHost, interactive: Bool) throws -> [String] {
         try host.validate()
-        let trustPath = knownHosts.replacingOccurrences(of: "%", with: "%%").replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let scoped = host.address.contains(":") && host.address.contains("%")
+        let certificates = scoped ? try KnownHostsStore(url: URL(fileURLWithPath: knownHosts)).scopedCertificateView(for: host) : nil
+        let canPromptForTrust = interactive && certificates == nil && host.controlPath == nil
+        let trustPath = (certificates == nil ? knownHosts : "/dev/null").replacingOccurrences(of: "%", with: "%%").replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
         var args = ["-F", "/dev/null", "-o", "UserKnownHostsFile=\"\(trustPath)\"",
-                    "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=\(interactive ? "ask" : "yes")",
+                    "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=\(canPromptForTrust ? "ask" : "yes")",
                     "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=\(keepAliveInterval)", "-o", "ServerAliveCountMax=3", "-o", "TCPKeepAlive=no",
                     "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no"]
+        // OpenSSH drops the zone from a numeric hostname. Each scoped address
+        // must keep its own trust record, even for identical link-local IPs.
+        if let certificates {
+            let helper = knownHostsHelper ?? Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("termvia-askpass")
+            guard let path = helper?.path, FileManager.default.isExecutableFile(atPath: path) else {
+                throw SSHError.invalid("认证辅助程序缺失，请重新构建应用")
+            }
+            let executable = path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            let store = Data(knownHosts.utf8).base64EncodedString(), address = Data(host.address.utf8).base64EncodedString()
+            args += ["-o", "HostKeyAlias=\(certificates.principal)", "-o", "CheckHostIP=no", "-o", "UpdateHostKeys=no",
+                     "-o", "KnownHostsCommand=\"\(executable)\" --scoped-known-hosts \(store) \(address) \(host.port)"]
+        } else if scoped {
+            args += ["-o", "HostKeyAlias=" + SSHHost.knownHostsKey(address: host.address, port: host.port)]
+        }
+        if let path = host.controlPath {
+            let control = path.replacingOccurrences(of: "%", with: "%%").replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            args += ["-o", "ControlPath=\"\(control)\"", "-o", "ControlMaster=no"]
+        }
+        // OpenSSH may need a second TCP connection if the server limits
+        // concurrent sessions. It must use the same routed ProxyCommand.
         if let transport = host.transportCommand {
             args += ["-o", "ProxyCommand=" + transport]
+        } else if host.controlPath != nil, host.upstream != nil {
+            args += ["-o", "ProxyCommand=/usr/bin/false"]
         } else if let address = host.connectionEndpoint {
             // Keep the configured SSH name for known_hosts and certificate principals.
             let endpoint = SSHRoute.shellQuote(address.replacingOccurrences(of: "%", with: "%%"))

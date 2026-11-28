@@ -8,13 +8,16 @@ import TermviaCore
         let key: String, url: URL
         let host: SSHHost?
         var authentication: AuthenticationContext?
-        var route: SSHRouteConnection?
+        var route: SSHRouteConnection.Lease?
         let remotePath: String?
+        let remoteSaveAvailable: Bool
         let findWorkspaceKey: String
         var findOptions = FindOptions()
         let activity: TabActivity
         weak var model: AppModel?
         var data: Data, attempted: Data?
+        var localVersion: LocalFileVersion?
+        var disconnectedCache: Data?
         var observedStamp: CacheStamp?
         var encoding = EditorEncoding.utf8
         var encodingWasSelected = false
@@ -39,13 +42,15 @@ import TermviaCore
         var view: NSScrollView?
         var highlightTask: Task<Void, Never>?
         var highlightGeneration: UInt64 = 0
-        init(key: String, url: URL, data: Data, model: AppModel, host: SSHHost? = nil, remotePath: String? = nil, authentication: AuthenticationContext? = nil, route: SSHRouteConnection? = nil, activity: TabActivity? = nil, findWorkspaceKey: String? = nil) {
+        init(key: String, url: URL, data: Data, model: AppModel, host: SSHHost? = nil, remotePath: String? = nil, authentication: AuthenticationContext? = nil, route: SSHRouteConnection.Lease? = nil, activity: TabActivity? = nil, findWorkspaceKey: String? = nil, remoteSaveAvailable: Bool = true) {
             self.key = key; self.url = url; self.data = data; self.model = model; self.host = host; self.remotePath = remotePath; self.authentication = authentication; self.route = route; self.activity = activity ?? TabActivity()
             self.findWorkspaceKey = host.map { "host:" + $0.id.uuidString } ?? findWorkspaceKey ?? "local"
+            self.remoteSaveAvailable = remoteSaveAvailable
         }
         var title: String { url.lastPathComponent + (host.map { " · " + $0.name } ?? "") }
         var isDisconnected: Bool { remotePath != nil && activity.isClosed }
-        func detachConnection() -> SSHRouteConnection? {
+        var canSave: Bool { remoteSaveAvailable && !isDisconnected }
+        func detachConnection() -> SSHRouteConnection.Lease? {
             authentication?.replaceCachedSecret(nil)
             authentication = nil
             let detached = route
@@ -54,6 +59,21 @@ import TermviaCore
         }
     }
     struct CacheStamp: Equatable { let modified: Date?; let size: UInt64; let inode: UInt64 }
+    struct LocalFileVersion: Equatable {
+        let device: dev_t, inode: ino_t, size: off_t
+        let modifiedSeconds: Int, modifiedNanoseconds: Int
+        let changedSeconds: Int, changedNanoseconds: Int
+
+        init(_ metadata: stat) {
+            device = metadata.st_dev
+            inode = metadata.st_ino
+            size = metadata.st_size
+            modifiedSeconds = metadata.st_mtimespec.tv_sec
+            modifiedNanoseconds = metadata.st_mtimespec.tv_nsec
+            changedSeconds = metadata.st_ctimespec.tv_sec
+            changedNanoseconds = metadata.st_ctimespec.tv_nsec
+        }
+    }
     @Published var revision = 0 { didSet { titlebar?.reload() } }
     private var documents: [Document] = []
     var openDocuments: [Document] { documents.filter { $0.view != nil } }
@@ -64,6 +84,8 @@ import TermviaCore
     private var tabMonitor: Any?
     private var pendingClosedSaves: [ObjectIdentifier: Document] = [:]
     private var window: NSWindow?
+    private var lastWindowFrame: NSRect?
+    private var saveCopyPanel: NSSavePanel?
     private var findPanel: TerminalSearchPanel?
     private let documentHost = NSView()
     private var selectedDocument: Document?
@@ -73,7 +95,11 @@ import TermviaCore
     private var closeTask: Task<Void, Never>?
     private var shuttingDown = false
     var isClosing: Bool { closeTask != nil }
+    var hasUnsavedChanges: Bool { documents.contains { hasUnsavedChanges($0) } }
     let openPrompts = EditorOpenPrompts()
+#if TERMVIA_DIAGNOSTICS
+    var externalOpenForTesting: ((URL, String) -> Void)?
+#endif
     private struct LoadJob {
         let activityID: UUID?
         let task: Task<Void, Never>
@@ -113,11 +139,12 @@ import TermviaCore
     }
     private func openLocalConfirmed(_ url: URL, model: AppModel, findWorkspaceKey: String, sizeConfirmed: Bool = false) {
         do {
-            let data = try readText(url)
+            let (data, metadata) = try readTextSnapshot(url, requireStableVersion: true)
             if !sizeConfirmed, data.count > EditorFileInspection.smallFileLimit { openLocal(url, model: model, findWorkspaceKey: findWorkspaceKey); return }
             if !model.settings.useBuiltInEditor { openExternal(url, model: model); return }
             let key = "local:" + url.standardizedFileURL.path
             let document = Document(key: key, url: url, data: data, model: model, findWorkspaceKey: findWorkspaceKey)
+            document.localVersion = LocalFileVersion(metadata)
             document.encoding = EditorFileInspection(size: UInt64(data.count), header: data).encoding
             documents.append(document); show(document, data: data)
         } catch { model.error = error.localizedDescription }
@@ -127,27 +154,28 @@ import TermviaCore
         return T("文件大小：%@", size)
     }
     func openRemote(_ entry: RemoteEntry, session: Session, model: AppModel) {
-        guard !shuttingDown, !session.activity.isClosed, entry.kind == .file, let original = session.host else { return }
+        guard !shuttingDown, !session.activity.isClosed, entry.kind == .file, let source = session.routeConnection else { return }
         let activity = session.activity
-        let key = "remote:" + activity.id.uuidString + ":" + entry.path
+        let key = "remote:" + source.id.uuidString + ":" + entry.path
         guard loadingJobs[key] == nil else { return }
         loadingJobs[key] = LoadJob(activityID: activity.id, task: Task { [weak self] in
             guard let self else { return }
             defer { self.loadingJobs[key] = nil }
             do {
                 try Task.checkCancellation()
+                guard session.routeConnection === source else { return }
                 if let document = documents.first(where: { $0.key == key }) {
                     let data = try readText(document.url)
                     document.attempted = nil; document.observedStamp = nil; document.lastError = nil; synchronize(document)
-                    if model.settings.useBuiltInEditor { show(document, data: data) } else { openExternal(document.url, model: model) }
+                    if model.settings.useBuiltInEditor || !document.canSave { show(document, data: data) }
+                    else { openExternal(document.url, model: model) }
                     return
                 }
-                let (host, authentication, route) = try await model.editorConnection(for: original)
+                let (host, authentication, route) = try model.editorConnection(for: session)
                 var retained = false
                 defer { if !retained { route.close() } }
                 try Task.checkCancellation()
                 let lease = try authentication.lease(); defer { lease.close() }
-                route.finishVerification()
                 let method = model.fileProtocol(for: session)
                 let inspection: EditorFileInspection
                 if method == .sftp { inspection = try await lease.inspectFile(entry.path, invocation: model.commands.sftpSubsystem(host)) }
@@ -180,16 +208,38 @@ import TermviaCore
                 if !inspection.needsSizeConfirmation, data.count > EditorFileInspection.smallFileLimit {
                     guard try await openPrompts.ask(name: entry.name, detail: largeFileDetail(EditorFileInspection(size: UInt64(data.count), header: data)), downloadOnly: false, window: session.terminal.window ?? NSApp.keyWindow) else { return }
                 }
+                let request = try RemoteEditorSave.probe(remote: entry.path)
+                var probe = try model.commands.execute(host, command: request.command)
+                probe.input = request.input
+                let writable = await canSaveRemotely(lease, invocation: probe)
                 try Task.checkCancellation()
-                let document = Document(key: key, url: target, data: data, model: model, host: host, remotePath: entry.path, authentication: authentication, route: route, activity: activity)
+                let document = Document(key: key, url: target, data: data, model: model, host: host, remotePath: entry.path, authentication: writable ? authentication : nil, route: writable ? route : nil, activity: activity, remoteSaveAvailable: writable)
                 document.encoding = EditorFileInspection(size: UInt64(data.count), header: data).encoding
-                documents.append(document); retained = true; startWatching()
-                if model.settings.useBuiltInEditor { show(document, data: data) } else { openExternal(target, model: model) }
+                documents.append(document); retained = true
+                if writable { startWatching() }
+                else { route.close() }
+                if model.settings.useBuiltInEditor || !writable { show(document, data: data) }
+                else { openExternal(target, model: model) }
             } catch is CancellationError {} catch { if !Task.isCancelled { model.error = error.localizedDescription } }
         })
     }
+    private func canSaveRemotely(_ lease: AuthenticationLease, invocation: Invocation) async -> Bool {
+        let probe = Task { try await lease.run(invocation, outputLimit: 4096) }
+        let timeout = Task {
+            do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            probe.cancel()
+        }
+        defer { timeout.cancel() }
+        return await withTaskCancellationHandler {
+            guard let result = try? await probe.value, result.status == 0 else { return false }
+            return result.output.split(whereSeparator: \.isNewline).contains(Substring(RemoteEditorSave.writableReply))
+        } onCancel: { probe.cancel() }
+    }
     private func sessionCache(_ id: UUID) -> URL { cacheRoot.appendingPathComponent(id.uuidString, isDirectory: true) }
     private func readText(_ url: URL) throws -> Data {
+        try readTextSnapshot(url).data
+    }
+    private func readTextSnapshot(_ url: URL, requireStableVersion: Bool = false) throws -> (data: Data, metadata: stat) {
         let descriptor = url.withUnsafeFileSystemRepresentation { path in
             path.map { open($0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC) } ?? -1
         }
@@ -207,9 +257,21 @@ import TermviaCore
         guard (inspection.encoding != .utf8 || !data.contains(0)), try inspection.isText() else {
             throw SSHError.invalid("仅支持文本文件")
         }
-        return data
+        if requireStableVersion {
+            var current = stat()
+            guard fstat(descriptor, &current) == 0, LocalFileVersion(current) == LocalFileVersion(metadata) else {
+                throw localSaveConflict()
+            }
+        }
+        return (data, metadata)
     }
     private func openExternal(_ url: URL, model: AppModel) {
+#if TERMVIA_DIAGNOSTICS
+        if let externalOpenForTesting {
+            externalOpenForTesting(url, model.settings.externalEditorPath)
+            return
+        }
+#endif
         if model.settings.externalEditorPath.isEmpty {
             if !NSWorkspace.shared.open(url) { model.error = T("无法打开文件") }
         } else {
@@ -235,8 +297,12 @@ import TermviaCore
         window.setContentSize(NSSize(width: 840, height: 620)); window.minSize = NSSize(width: 480, height: 260)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]; window.isReleasedWhenClosed = false
         window.identifier = .init("Termvia.FileEditor"); window.isExcludedFromWindowsMenu = true; window.tabbingMode = .disallowed
+        window.isRestorable = false
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]; window.delegate = self
-        window.title = ""; window.center(); self.window = window
+        window.title = ""
+        if let lastWindowFrame { window.setFrame(lastWindowFrame, display: false) }
+        else { window.center() }
+        self.window = window
         titlebar = EditorTitlebarController(controller: self, window: window)
         tabMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self, weak window] event in
             guard let self, let window, window.attachedSheet == nil, NSApp.modalWindow == nil else { return event }
@@ -248,6 +314,17 @@ import TermviaCore
             if event.type == .keyDown, event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "w" { self.closeCurrent(); return nil }
             return event
         }
+    }
+    private func closeWindow() {
+        guard let window else { return }
+        lastWindowFrame = window.frame
+        self.window = nil
+        if let tabMonitor { NSEvent.removeMonitor(tabMonitor); self.tabMonitor = nil }
+        window.delegate = nil
+        window.close()
+        window.toolbar = nil
+        window.contentViewController = nil
+        titlebar = nil
     }
     private func show(_ document: Document, data current: Data) {
         guard !shuttingDown else { return }
@@ -274,7 +351,7 @@ import TermviaCore
             editor.isAutomaticQuoteSubstitutionEnabled = false; editor.isAutomaticDashSubstitutionEnabled = false; editor.isAutomaticTextReplacementEnabled = false; editor.isContinuousSpellCheckingEnabled = false
             editor.font = .monospacedSystemFont(ofSize: document.fontSize, weight: .regular)
             editor.textColor = .textColor; editor.backgroundColor = .textBackgroundColor; editor.textContainerInset = NSSize(width: 10, height: 10)
-            editor.string = text; editor.isEditable = !document.decodeFailed; editor.delegate = self; scroll.documentView = editor
+            editor.string = text; editor.isEditable = !document.decodeFailed && document.canSave; editor.delegate = self; scroll.documentView = editor
             let ruler = EditorLineNumbers(scroll: scroll, editor: editor); document.ruler = ruler
             scroll.verticalRulerView = ruler; scroll.hasVerticalRuler = true; scroll.hasHorizontalRuler = false; scroll.rulersVisible = true; scroll.tile()
             editor.sizeToFit()
@@ -298,23 +375,49 @@ import TermviaCore
         documents.first(where: { $0.textView === view })?.undo
     }
     @discardableResult private func save(_ document: Document) -> Bool {
-        guard !shuttingDown, !document.closed, !document.isDisconnected else { return false }
+        guard !shuttingDown, !document.closed, document.canSave else { return false }
         guard (!document.refreshing || document.savingBeforeLeaving), !document.refreshBlocksSync else { return true }
         do {
             if let editor = document.textView, document.dirty {
                 guard !document.decodeFailed, let data = document.encoding.encode(document.lineEnding.apply(editor.string)) else { throw SSHError.invalid("当前编码无法无损保存此文本") }
                 guard data.count <= 16 * 1024 * 1024 else { throw SSHError.invalid("仅支持 16 MB 以内的文件") }
-                if (try? Data(contentsOf: document.url)) != data {
+                if document.remotePath == nil {
+                    try saveLocal(data, document: document)
+                } else if (try? readText(document.url)) != data {
                     let permissions = try FileManager.default.attributesOfItem(atPath: document.url.path)[.posixPermissions]
                     try data.write(to: document.url, options: .atomic)
                     if let permissions { try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: document.url.path) }
                 }
                 document.dirty = false
-                if document.remotePath == nil { document.data = data }
             }
             if document.remotePath != nil { synchronize(document) }
             return true
         } catch { document.model?.error = error.localizedDescription; return false }
+    }
+    private func localSaveConflict() -> SSHError {
+        .invalid("本地文件已更改。请先另存副本，再刷新文件。")
+    }
+    private func saveLocal(_ data: Data, document: Document) throws {
+        guard let expected = document.localVersion,
+              let original = try? readTextSnapshot(document.url, requireStableVersion: true),
+              LocalFileVersion(original.metadata) == expected, original.data == document.data else {
+            throw localSaveConflict()
+        }
+        guard data != original.data else { return }
+        let staging = try DownloadStaging(destination: document.url, overwrite: true)
+        try data.write(to: staging.fileURL)
+        try FileManager.default.setAttributes([.posixPermissions: original.metadata.st_mode & 0o7777], ofItemAtPath: staging.fileURL.path)
+        var latest = stat(), replacement = stat()
+        guard lstat(staging.fileURL.path, &replacement) == 0,
+              lstat(document.url.path, &latest) == 0, LocalFileVersion(latest) == expected else {
+            throw localSaveConflict()
+        }
+        try staging.commit()
+        guard lstat(document.url.path, &latest) == 0, latest.st_dev == replacement.st_dev, latest.st_ino == replacement.st_ino else {
+            throw localSaveConflict()
+        }
+        document.localVersion = LocalFileVersion(latest)
+        document.data = data
     }
     private func startWatching() {
         guard timer == nil else { return }
@@ -322,15 +425,17 @@ import TermviaCore
         self.timer = timer; RunLoop.main.add(timer, forMode: .common)
     }
     private func scan() {
-        for document in documents where document.remotePath != nil { synchronize(document) }
+        for document in documents where document.remotePath != nil && !document.closing && !document.savingBeforeLeaving {
+            synchronize(document)
+        }
     }
     private func synchronize(_ document: Document) {
-        guard !shuttingDown, !document.isDisconnected, !document.refreshBlocksSync, (!document.refreshing || document.savingBeforeLeaving), !document.syncing, let model = document.model, let host = document.host, let remote = document.remotePath else { return }
+        guard !shuttingDown, !document.closed, document.canSave, !document.refreshBlocksSync, (!document.refreshing || document.savingBeforeLeaving), !document.syncing, let model = document.model, let host = document.host, let remote = document.remotePath else { return }
         do {
             let attributes = try FileManager.default.attributesOfItem(atPath: document.url.path)
             let stamp = CacheStamp(modified: attributes[.modificationDate] as? Date, size: (attributes[.size] as? NSNumber)?.uint64Value ?? 0, inode: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0)
             guard stamp != document.observedStamp else {
-                if !document.syncing { finishSaveWaiters(document, success: document.attempted == nil); if document.closed { document.route?.close() } }
+                if !document.dirty { finishSaveWaiters(document, success: document.attempted == nil) }
                 return
             }
             let data = try readText(document.url)
@@ -341,8 +446,8 @@ import TermviaCore
             }
             document.lastError = nil
             guard data != document.data, data != document.attempted else {
-                // Reentrant cache observations must wait for the upload's result.
-                if !document.syncing { finishSaveWaiters(document, success: data == document.data); if document.closed { document.route?.close() } }
+                // An observed cache can still be older than the editor's draft.
+                if !document.dirty { finishSaveWaiters(document, success: data == document.data) }
                 return
             }
             document.attempted = data; document.syncing = true
@@ -353,7 +458,8 @@ import TermviaCore
             let snapshot = folder.appendingPathComponent(document.url.lastPathComponent)
             try data.write(to: snapshot); try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: snapshot.path)
             revision += 1
-            model.enqueue(local: snapshot.path, remote: remote, upload: true, method: host.fileProtocol ?? .sftp, host: host, authentication: document.authentication, activity: document.activity, editorOwned: true) { [weak self, document] success in
+            let digest = RemoteEditorSave.digest(of: document.data)
+            model.enqueue(local: snapshot.path, remote: remote, upload: true, method: host.fileProtocol ?? .sftp, host: host, authentication: document.authentication, activity: document.activity, editorOwned: true, editorBaseDigest: digest) { [weak self, document] success in
                 try? FileManager.default.removeItem(at: folder)
                 document.syncing = false
                 if document.isDisconnected {
@@ -362,10 +468,13 @@ import TermviaCore
                 }
                 if success { document.data = data; document.attempted = nil }
                 self?.revision += 1
-                if success { self?.synchronize(document) }
-                else { self?.finishSaveWaiters(document, success: false); if document.closed { document.route?.close() } }
-                if document.closed, !document.syncing {
+                if document.closed {
+                    document.route?.close()
                     self?.pendingClosedSaves.removeValue(forKey: ObjectIdentifier(document))
+                } else if success {
+                    self?.synchronize(document)
+                } else {
+                    self?.finishSaveWaiters(document, success: false)
                 }
             }
         } catch {
@@ -402,7 +511,7 @@ import TermviaCore
             defer {
                 document.refreshTask = nil; document.refreshing = false
                 if !document.closed {
-                    document.textView?.isEditable = !document.decodeFailed && !document.closing && !document.isDisconnected
+                    document.textView?.isEditable = !document.decodeFailed && !document.closing && document.canSave
                     if document.dirty { highlight(document) }
                 }
                 revision += 1
@@ -421,7 +530,7 @@ import TermviaCore
                 }
                 try Task.checkCancellation()
                 // Reload this document's existing local file or remote cache only.
-                let data = try readText(document.url)
+                let (data, metadata) = try readTextSnapshot(document.url, requireStableVersion: document.remotePath == nil)
                 if data.count > EditorFileInspection.smallFileLimit, document.data.count <= EditorFileInspection.smallFileLimit {
                     guard try await openPrompts.ask(name: document.title, detail: largeFileDetail(EditorFileInspection(size: UInt64(data.count), header: data)), downloadOnly: false, window: window) else { return }
                 }
@@ -431,7 +540,7 @@ import TermviaCore
                 if bom != .utf8 || !document.encodingWasSelected { document.encoding = bom }
                 let decoded = document.encoding.decode(data)
                 document.decodeFailed = decoded == nil
-                editor.isEditable = decoded != nil
+                editor.isEditable = decoded != nil && document.canSave
                 document.lineEnding = decoded?.contains("\r\n") == true ? .crlf : .lf
                 let cursor = editor.selectedRange().location
                 editor.string = EditorLineEnding.lf.apply(decoded ?? String(decoding: data, as: UTF8.self))
@@ -439,7 +548,10 @@ import TermviaCore
                 editor.setSelectedRange(NSRange(location: min(cursor, (editor.string as NSString).length), length: 0))
                 // Remote data/attempts/stamps belong to the cache uploader. A
                 // display reload must not mark pending cache edits as uploaded.
-                if document.remotePath == nil { document.data = data }
+                if document.remotePath == nil {
+                    document.localVersion = LocalFileVersion(metadata)
+                    document.data = data
+                }
                 document.dirty = false; document.refreshBlocksSync = false
                 document.ruler?.rebuild(); editor.sizeToFit(); highlight(document)
                 if document === currentDocument { findPanel?.editorTextChanged() }
@@ -451,15 +563,65 @@ import TermviaCore
         document.refreshing = false
     }
     @objc func saveCurrent() {
-        guard let document = currentDocument, !document.refreshing, !document.closing, !document.isDisconnected, !shuttingDown else { return }
+        guard let document = currentDocument, !document.refreshing, !document.closing, document.canSave, !shuttingDown else { return }
         document.refreshBlocksSync = false; document.attempted = nil; document.observedStamp = nil; save(document); revision += 1
+    }
+    func saveLocalCopy(_ document: Document) {
+        Task { [weak self, weak document] in
+            guard let self, let document else { return }
+            do { _ = try await saveLocalCopyAndWait(document) }
+            catch is CancellationError {}
+            catch { document.model?.error = error.localizedDescription }
+        }
+    }
+    private func saveLocalCopyAndWait(_ document: Document) async throws -> Bool {
+        try Task.checkCancellation()
+        guard let window, window.attachedSheet == nil, saveCopyPanel == nil, !shuttingDown, !document.closed else { return false }
+        let data = localCopyData(for: document)
+        guard let data else {
+            throw SSHError.invalid("当前编码无法无损保存此文本")
+        }
+        let panel = NSSavePanel()
+        saveCopyPanel = panel
+        defer { saveCopyPanel = nil }
+        panel.nameFieldStringValue = document.url.lastPathComponent
+        panel.directoryURL = document.model.map { URL(fileURLWithPath: $0.localPath, isDirectory: true) }
+        let response = await withTaskCancellationHandler(operation: {
+            await panel.beginSheetModal(for: window)
+        }, onCancel: { Task { @MainActor [weak panel] in panel?.cancel(nil) } })
+        try Task.checkCancellation()
+        guard response == .OK, let destination = panel.url, !shuttingDown, !document.closed else { return false }
+        if document.remotePath == nil {
+            let path = destination.standardizedFileURL.resolvingSymlinksInPath().path
+            var original = stat(), candidate = stat()
+            guard path != document.url.path,
+                  !(lstat(document.url.path, &original) == 0 && lstat(path, &candidate) == 0
+                    && original.st_dev == candidate.st_dev && original.st_ino == candidate.st_ino) else {
+                throw localSaveConflict()
+            }
+        }
+        let staging = try DownloadStaging(destination: destination, overwrite: true)
+        try data.write(to: staging.fileURL)
+        try staging.commit()
+        return true
+    }
+    func localCopyData(for document: Document) -> Data? {
+        if document.dirty, !document.decodeFailed, let editor = document.textView {
+            return document.encoding.encode(document.lineEnding.apply(editor.string))
+        }
+        return document.disconnectedCache ?? (try? readText(document.url)) ?? document.data
     }
     func showFind() {
         guard let document = currentDocument, let editor = document.textView, let window,
               window.attachedSheet == nil, NSApp.modalWindow == nil else { return }
         let panel = findPanel ?? TerminalSearchPanel()
         findPanel = panel
-        panel.present(for: editor, in: window, options: document.findOptions) { [weak document] options in
+        panel.present(for: editor, in: window, options: document.findOptions, format: { [weak document] in
+            guard let document else { return .init() }
+            return EditorReplacementFormat(encoding: document.encoding, lineEnding: document.lineEnding)
+        }, onReplacementFailure: { [weak document] error in
+            document?.model?.error = error.localizedDescription
+        }) { [weak document] options in
             document?.findOptions = options
         }
     }
@@ -492,9 +654,9 @@ import TermviaCore
     func closeAll() { requestClose(openDocuments) }
 
     private func hasUnsavedChanges(_ document: Document) -> Bool {
-        guard !document.isDisconnected else { return false }
         if document.dirty { return true }
-        guard document.remotePath != nil else { return false }
+        if document.isDisconnected { return document.disconnectedCache != nil }
+        guard document.canSave, document.remotePath != nil else { return false }
         // A saved cache is still unsaved at its destination until upload succeeds.
         return document.syncing || document.attempted != nil || (try? readText(document.url)) != document.data
     }
@@ -507,7 +669,7 @@ import TermviaCore
         if !confirmAll, requested.allSatisfy({ !hasUnsavedChanges($0) && !$0.refreshing }) {
             if wholeWindow { cancelOpenJobs() }
             for document in requested { removeDocument(document) }
-            if wholeWindow, openDocuments.isEmpty { window?.orderOut(nil) }
+            if wholeWindow, openDocuments.isEmpty { closeWindow() }
             return
         }
         closeTask = Task { [weak self] in
@@ -534,14 +696,18 @@ import TermviaCore
         document.closing = true; document.textView?.isEditable = false
         defer {
             document.closing = false
-            if !document.closed { document.textView?.isEditable = !document.decodeFailed && !document.isDisconnected }
+            if !document.closed { document.textView?.isEditable = !document.decodeFailed && document.canSave }
             revision += 1
         }
         if hasUnsavedChanges(document) {
             select(document)
-            switch try await openPrompts.confirmClose(name: document.title, window: window) {
+            switch try await openPrompts.confirmClose(name: document.title, canSaveOriginal: document.canSave, window: window) {
             case .save:
-                guard try await saveAndWait(document) else { return false }
+                if document.canSave {
+                    guard try await saveAndWait(document) else { return false }
+                } else {
+                    guard try await saveLocalCopyAndWait(document) else { return false }
+                }
             case .discard: break
             case .cancel, .proceed: return false
             }
@@ -571,7 +737,7 @@ import TermviaCore
         }
         // Already approved uploads retain their stable snapshots/authentication.
         if !document.syncing { document.route?.close() }
-        if openDocuments.isEmpty { window?.orderOut(nil) }
+        if openDocuments.isEmpty { closeWindow() }
         revision += 1
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -598,8 +764,13 @@ import TermviaCore
             guard encoding.encode(document.lineEnding.apply(editor.string)) != nil else { document.model?.error = T("当前编码无法无损保存此文本"); return }
             document.encoding = encoding; document.decodeFailed = false; document.refreshBlocksSync = false; highlight(document)
         } else {
-            guard let data = try? readText(document.url), let text = encoding.decode(data) else { document.model?.error = T("无法使用所选编码打开文件"); return }
-            document.encoding = encoding; document.decodeFailed = false; editor.isEditable = true
+            guard let (data, metadata) = try? readTextSnapshot(document.url, requireStableVersion: document.remotePath == nil),
+                  let text = encoding.decode(data) else { document.model?.error = T("无法使用所选编码打开文件"); return }
+            if document.remotePath == nil {
+                document.localVersion = LocalFileVersion(metadata)
+                document.data = data
+            }
+            document.encoding = encoding; document.decodeFailed = false; editor.isEditable = document.canSave
             document.lineEnding = text.contains("\r\n") ? .crlf : .lf
             editor.string = EditorLineEnding.lf.apply(text); document.undo.removeAllActions(); document.ruler?.rebuild(); editor.sizeToFit(); highlight(document)
             findPanel?.editorTextChanged()
@@ -607,7 +778,7 @@ import TermviaCore
         document.encodingWasSelected = true
         revision += 1
     }
-    func setLineEnding(_ ending: EditorLineEnding) { guard let document = currentDocument, !document.decodeFailed, !document.closing, !document.isDisconnected else { return }; document.lineEnding = ending; document.refreshBlocksSync = false; document.dirty = true; revision += 1 }
+    func setLineEnding(_ ending: EditorLineEnding) { guard let document = currentDocument, !document.decodeFailed, !document.closing, document.canSave else { return }; document.lineEnding = ending; document.refreshBlocksSync = false; document.dirty = true; revision += 1 }
     func setSyntax(_ syntax: String) {
         guard let document = currentDocument else { return }
         if syntax == "custom" {
@@ -673,13 +844,25 @@ import TermviaCore
             finishSaveWaiters(document, success: false)
             if document.view == nil { removeDocument(document) }
             else {
+                if !document.dirty,
+                   let data = (try? readText(document.url)) ?? document.attempted,
+                   data != document.data {
+                    document.disconnectedCache = data
+                    if let editor = document.textView, let text = document.encoding.decode(data) {
+                        let normalized = EditorLineEnding.lf.apply(text)
+                        if editor.string != normalized {
+                            editor.string = normalized
+                            document.ruler?.rebuild(); editor.sizeToFit(); highlight(document)
+                        }
+                    }
+                }
                 document.textView?.isEditable = false
                 document.undo.removeAllActions()
             }
         }
         if let currentDocument, currentDocument.isDisconnected { findPanel?.editorTextChanged() }
         if !owned.isEmpty { revision += 1 }
-        if !documents.contains(where: { $0.remotePath != nil && !$0.isDisconnected }) {
+        if !documents.contains(where: { $0.remotePath != nil && $0.canSave }) {
             timer?.invalidate(); timer = nil
         }
         let directory = sessionCache(id)
@@ -699,13 +882,14 @@ import TermviaCore
         shuttingDown = true
         closeTask?.cancel(); closeTask = nil
         timer?.invalidate(); timer = nil
+        saveCopyPanel?.cancel(nil)
         openPrompts.cancelAll(); cancelOpenJobs()
         // Quit overrides every sheet/close sequence. Never save or enqueue new
         // uploads here; the application cancels transfers during shutdown.
         for document in documents {
             removeDocument(document, selectNext: false)
         }
-        window?.orderOut(nil)
+        closeWindow()
     }
     func finishShutdown() async {
         for job in Array(loadingJobs.values) { await job.task.value }
@@ -724,11 +908,18 @@ private struct EditorFooter: View {
             if let document = controller.currentDocument {
                 if document.isDisconnected {
                     Text(T("已断开")).font(.caption).foregroundStyle(.secondary)
+                } else if !document.remoteSaveAvailable {
+                    Text(T("只读")).font(.caption).foregroundStyle(.secondary)
+                        .help(T("远程服务器无法安全保存此文件。可以另存为本地副本。"))
+                }
+                if !document.canSave {
+                    Button(T("另存为…")) { controller.saveLocalCopy(document) }
+                        .help(T("远程服务器无法安全保存此文件。可以另存为本地副本。"))
                 }
                 NativePopUpPicker(selection: Binding(get: { document.encoding }, set: { controller.setEncoding($0) }), options: EditorEncoding.allCases.map { ($0, $0.rawValue) }, label: "编码", identifier: "Termvia.Editor.Encoding", preferredEdge: .top).frame(width: 112)
                     .disabled(document.isDisconnected)
                 NativePopUpPicker(selection: Binding(get: { document.lineEnding }, set: { controller.setLineEnding($0) }), options: EditorLineEnding.allCases.map { ($0, $0.rawValue) }, label: "换行符", identifier: "Termvia.Editor.LineEnding", preferredEdge: .top).frame(width: 72)
-                    .disabled(document.isDisconnected)
+                    .disabled(!document.canSave)
                 NativePopUpPicker(selection: Binding(get: { document.syntax }, set: { controller.setSyntax($0) }), options: formats.map { ($0, $0 == "auto" ? T("自动识别") : $0 == "plain" ? T("纯文本") : $0 == "custom" ? T("自定义…") : $0.uppercased()) }, label: "语法高亮", identifier: "Termvia.Editor.Syntax", preferredEdge: .top).frame(width: 120)
             }
         }.padding(.horizontal, 8).controlSize(.mini).disabled(controller.currentDocument?.refreshing == true || controller.currentDocument?.closing == true).background(.bar)

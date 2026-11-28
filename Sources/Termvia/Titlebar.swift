@@ -12,7 +12,7 @@ import Combine
     static let controlIDs = [sidebarID, panelID, settingsID]
     let model: AppModel
     private weak var window: NSWindow?
-    let toolbar = NSToolbar(identifier: "Termvia.Titlebar")
+    let toolbar = NSToolbar(identifier: "Termvia.Titlebar.\(UUID().uuidString)")
     private var layoutObservers = Set<AnyCancellable>()
     private var appearanceRefresh: ToolbarAppearanceRefresh?
     private var tabContextMonitor: Any?

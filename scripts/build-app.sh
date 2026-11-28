@@ -1,37 +1,40 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+case "$#:${1-}" in
+    0:) app_dir="$PWD/build/Termvia.app" ;;
+    1:--test-bundle) app_dir="$PWD/build/diagnostics/Termvia.app" ;;
+    *) echo "Usage: $0 [--test-bundle]" >&2; exit 2 ;;
+esac
 [ "$(uname -m)" = arm64 ] || { echo 'Apple Silicon is required.' >&2; exit 1; }
 os_version=$(sw_vers -productVersion)
 sdk_version=$(xcrun --sdk macosx --show-sdk-version)
 [ "${os_version%%.*}" -ge 27 ] && [ "${sdk_version%%.*}" -ge 27 ] || {
     echo 'macOS 27 or later and the macOS 27 SDK or later are required.' >&2; exit 1;
 }
-swift build --arch arm64 -c release --product Termvia
-swift build --arch arm64 -c release --product termvia-askpass
-swift build --arch arm64 -c release --product termvia-proxy
-bash scripts/build-wireguard.sh
-bash scripts/build-ppk.sh
-bin_dir=$(swift build --arch arm64 -c release --show-bin-path)
-app_dir="$PWD/build/Termvia.app"
+swift_options=(--arch arm64 -c release --only-use-versions-from-resolved-file)
+swift build "${swift_options[@]}" --product Termvia
+swift build "${swift_options[@]}" --product termvia-askpass
+swift build "${swift_options[@]}" --product termvia-proxy
+bash scripts/build-rust-helpers.sh
+rust_bin_dir="$PWD/.build/rust/aarch64-apple-darwin/release"
+bin_dir=$(swift build "${swift_options[@]}" --show-bin-path)
 # Recreate the bundle so removed resources cannot survive an incremental build.
 rm -rf "$app_dir"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$bin_dir/Termvia" "$app_dir/Contents/MacOS/Termvia"
 install -m 755 "$bin_dir/termvia-askpass" "$app_dir/Contents/MacOS/termvia-askpass"
-install -m 755 .build/termvia-wireguard "$app_dir/Contents/MacOS/termvia-wireguard"
-codesign --force --sign - "$app_dir/Contents/MacOS/termvia-wireguard"
-cp -R .build/wireguard-licenses "$app_dir/Contents/Resources/WireGuard-Licenses"
 install -m 755 "$bin_dir/termvia-proxy" "$app_dir/Contents/MacOS/termvia-proxy"
 strip -S "$app_dir/Contents/MacOS/termvia-proxy"
 codesign --force --sign - "$app_dir/Contents/MacOS/termvia-proxy"
 # Remove debug symbols and their absolute local build paths before signing.
 strip -S "$app_dir/Contents/MacOS/Termvia" "$app_dir/Contents/MacOS/termvia-askpass"
 codesign --force --sign - "$app_dir/Contents/MacOS/termvia-askpass"
-install -m 755 .build/ppk-build/puttygen "$app_dir/Contents/MacOS/termvia-ppk"
-strip -S "$app_dir/Contents/MacOS/termvia-ppk"
-codesign --force --sign - "$app_dir/Contents/MacOS/termvia-ppk"
-install -m 644 .build/ppk-source/putty-0.85/LICENCE "$app_dir/Contents/Resources/PuTTY-LICENSE.txt"
+for helper in termvia-wireguard termvia-ppk; do
+    install -m 755 "$rust_bin_dir/$helper" "$app_dir/Contents/MacOS/$helper"
+    codesign --force --sign - "$app_dir/Contents/MacOS/$helper"
+done
+python3 scripts/bundle-rust-licenses.py "$app_dir/Contents/Resources/Rust-Licenses"
 cp Resources/Info.plist "$app_dir/Contents/Info.plist"
 # Stamp the packaged artifact, so About reports this build rather than launch time.
 /usr/libexec/PlistBuddy -c "Add :TermviaBuildDate string $(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$app_dir/Contents/Info.plist"

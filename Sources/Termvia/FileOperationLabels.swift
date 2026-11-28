@@ -2,7 +2,7 @@ import TermviaCore
 extension SFTPOperation {
     var title: String {
         switch self {
-        case .uploadFile: return "上传"
+        case .uploadFile, .stageUpload: return "上传"
         case .downloadFile: return "下载"
         case .list: return "读取目录"
         case .makeDirectory: return "新建文件夹"
@@ -24,7 +24,7 @@ extension SFTPOperation {
         switch self {
         case .list(let path), .makeDirectory(let path), .makeFile(let path), .removeFile(let path), .removeDirectory(let path), .removeTree(let path): return path
         case .copyFile(let a, let b), .rename(let a, let b): return a + " → " + b
-        case .uploadFile(let a, let b), .downloadFile(let a, let b): return a + " → " + b
+        case .uploadFile(let a, let b), .stageUpload(let a, let b, _), .downloadFile(let a, let b): return a + " → " + b
         case .batch(let items): return items.map(\.displayPath).joined(separator: "\n")
         }
     }

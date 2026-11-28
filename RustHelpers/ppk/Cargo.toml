@@ -1,0 +1,19 @@
+[package]
+name = "termvia-ppk"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+
+[dependencies]
+aes = { version = "0.8.4", features = ["zeroize"] }
+argon2 = { version = "0.5.3", features = ["zeroize"] }
+base64 = "0.22.1"
+cbc = { version = "0.1.2", features = ["zeroize"] }
+hex = "0.4.3"
+hmac = "0.12.1"
+libc = "0.2"
+sha1 = "0.10.6"
+sha2 = "0.10.9"
+ssh-key = { version = "=0.7.0-rc.12", features = ["ed25519", "encryption", "getrandom"] }
+zeroize = "1.8"

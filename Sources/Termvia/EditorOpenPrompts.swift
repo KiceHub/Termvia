@@ -5,7 +5,7 @@ import TermviaCore
 enum EditorOpenChoice { case proceed, save, discard, cancel }
 
 @MainActor final class EditorOpenPrompts {
-    private enum Kind { case open, download, refresh, close, closeAll }
+    private enum Kind { case open, download, refresh, close, closeCopy, closeAll }
     private struct Request {
         let id: UUID, name: String, detail: String, kind: Kind, window: NSWindow
         let continuation: CheckedContinuation<EditorOpenChoice, Never>
@@ -26,8 +26,8 @@ enum EditorOpenChoice { case proceed, save, discard, cancel }
     func confirmRefresh(name: String, window: NSWindow?) async throws -> EditorOpenChoice {
         try await ask(name: name, detail: "", kind: .refresh, window: window)
     }
-    func confirmClose(name: String, window: NSWindow?) async throws -> EditorOpenChoice {
-        try await ask(name: name, detail: "", kind: .close, window: window)
+    func confirmClose(name: String, canSaveOriginal: Bool, window: NSWindow?) async throws -> EditorOpenChoice {
+        try await ask(name: name, detail: "", kind: canSaveOriginal ? .close : .closeCopy, window: window)
     }
     func confirmCloseAll(window: NSWindow?) async throws -> Bool {
         try await ask(name: "", detail: "", kind: .closeAll, window: window) == .proceed
@@ -53,12 +53,13 @@ enum EditorOpenChoice { case proceed, save, discard, cancel }
         case .open: alert.messageText = T("打开大文件？")
         case .download: alert.messageText = T("无法编辑此文件")
         case .refresh: alert.messageText = T("刷新前是否保存文件？")
-        case .close: alert.messageText = T("关闭前是否保存文件？")
+        case .close, .closeCopy: alert.messageText = T("关闭前是否保存文件？")
         case .closeAll: alert.messageText = T("是否全部关闭？")
         }
         alert.informativeText = [request.name, request.detail].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        if request.kind == .refresh || request.kind == .close {
-            alert.addButton(withTitle: T("保存"))
+        let chooseSave = request.kind == .refresh || request.kind == .close || request.kind == .closeCopy
+        if chooseSave {
+            alert.addButton(withTitle: T(request.kind == .closeCopy ? "另存为…" : "保存"))
             alert.addButton(withTitle: T("不保存"))
         } else if request.kind == .closeAll {
             alert.addButton(withTitle: T("全部关闭"))
@@ -68,12 +69,13 @@ enum EditorOpenChoice { case proceed, save, discard, cancel }
         if request.kind != .refresh && request.kind != .close {
             alert.addButton(withTitle: T("取消")).keyEquivalent = "\u{1b}"
         }
-        alert.window.identifier = .init(request.kind == .close ? "Termvia.Editor.CloseConfirmation" : request.kind == .closeAll ? "Termvia.Editor.CloseAllConfirmation" : "Termvia.Editor.OpenConfirmation")
+        let closeDocument = request.kind == .close || request.kind == .closeCopy
+        alert.window.identifier = .init(closeDocument ? "Termvia.Editor.CloseConfirmation" : request.kind == .closeAll ? "Termvia.Editor.CloseAllConfirmation" : "Termvia.Editor.OpenConfirmation")
         alert.beginSheetModal(for: request.window) { [weak self] response in
             guard let self, self.current?.id == request.id else { return }
             self.current = nil; self.alert = nil
             let choice: EditorOpenChoice
-            if request.kind == .refresh || request.kind == .close { choice = response == .alertFirstButtonReturn ? .save : response == .alertSecondButtonReturn ? .discard : .cancel }
+            if chooseSave { choice = response == .alertFirstButtonReturn ? .save : response == .alertSecondButtonReturn ? .discard : .cancel }
             else { choice = response == .alertFirstButtonReturn ? .proceed : .cancel }
             request.continuation.resume(returning: choice); self.presentNext()
         }
